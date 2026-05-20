@@ -2,6 +2,8 @@
 >
 > **Workflow**: Read each problem → Write your own code → Compare with the reference implementation
 
+Entire codebase, except the README.md file, were written by hand coding.
+
 ---
 
 ## 📁 Target File Structure
@@ -450,9 +452,9 @@ def load_hf_model(model_path: str, device: str):
 ## 📚 Progress Checklist
 
 ### CHAPTER 1 — SigLIP
-- [ ] 1-1 SiglipVisionConfig
-- [ ] 1-2 SiglipVisionEmbeddings (patch embedding)
-- [ ] 1-3 SiglipAttention (Multi-Head Attention)
+- [X] 1-1 SiglipVisionConfig
+- [X] 1-2 SiglipVisionEmbeddings (patch embedding)
+- [X] 1-3 SiglipAttention (Multi-Head Attention)
 - [ ] 1-4 SiglipMLP (GELU FFN)
 - [ ] 1-5 SiglipEncoderLayer + SiglipEncoder
 - [ ] 1-6 SiglipVisionModel + shape verification
@@ -490,6 +492,4 @@ def load_hf_model(model_path: str, device: str):
 | SigLIP Paper | [arxiv.org/abs/2303.15343](https://arxiv.org/abs/2303.15343) |
 
 ---
-
-> 💡 **Study tip**: After solving each problem, create a dummy input with `torch.randn` and run a forward pass to verify the output shape. Half of deep learning debugging is tensor shape errors — build the habit early.
 
