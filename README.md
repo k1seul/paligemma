@@ -455,9 +455,9 @@ def load_hf_model(model_path: str, device: str):
 - [X] 1-1 SiglipVisionConfig
 - [X] 1-2 SiglipVisionEmbeddings (patch embedding)
 - [X] 1-3 SiglipAttention (Multi-Head Attention)
-- [ ] 1-4 SiglipMLP (GELU FFN)
-- [ ] 1-5 SiglipEncoderLayer + SiglipEncoder
-- [ ] 1-6 SiglipVisionModel + shape verification
+- [X] 1-4 SiglipMLP (GELU FFN)
+- [X] 1-5 SiglipEncoderLayer + SiglipEncoder
+- [X] 1-6 SiglipVisionModel + shape verification
 
 ### CHAPTER 2 — Gemma
 - [ ] 2-1 GemmaConfig
