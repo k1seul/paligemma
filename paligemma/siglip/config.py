@@ -1,9 +1,7 @@
 from dataclasses import dataclass
-import torch
-import torch.nn as nn
 
 @dataclass
-class SiglipVisionConifg:
+class SiglipVisionConfig:
     hidden_size : int = 768 # embedding dimension
     intermediate_size : int = 3072 # FFN hidden dimension
     num_hidden_layer : int = 12 # number of transformer layers

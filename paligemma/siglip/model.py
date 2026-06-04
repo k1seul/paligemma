@@ -1,4 +1,4 @@
-from paligemma.siglip.config import SiglipVisionConifg
+from paligemma.siglip.config import SiglipVisionConfig
 from paligemma.siglip.encoder import SiglipEncoder
 from paligemma.siglip.embeddings import SiglipVisionEmbeddings
 import torch
@@ -6,17 +6,15 @@ import torch.nn as nn
 
 
 class SiglipVisionTransformer(nn.Module):
-    def __init__(self, device : str = "cuda"):
+    def __init__(self, config : SiglipVisionConfig):
         super().__init__()
-        self.device = device
-        self.config = SiglipVisionConifg()
+        self.config = config
 
-        self.embedding = SiglipVisionEmbeddings(self.config, device)
-        self.encoder = SiglipEncoder(self.config, device)
-        self.layernorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps).to(self.device)
+        self.embedding = SiglipVisionEmbeddings(self.config)
+        self.encoder = SiglipEncoder(self.config)
+        self.layernorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
 
     def forward(self, x : torch.Tensor):
-        x.to(self.device)
         x = self.embedding(x)
         x = self.encoder(x)
         
@@ -24,18 +22,15 @@ class SiglipVisionTransformer(nn.Module):
 
 
 class SiglipVisionModel(SiglipVisionTransformer):
-    def __init__(self, config : SiglipVisionConifg, device : str = "cuda"):
-        nn.Module.__init__(self)
-        self.device = device
+    def __init__(self, config : SiglipVisionConfig | None):
+        if config is None:
+            config = SiglipVisionConfig()
 
-        self.config = config
-        self.embedding = SiglipVisionEmbeddings(self.config, device)
-        self.encoder = SiglipEncoder(self.config, device)
-        self.layernorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps).to(self.device)
+        super().__init__(config)
 
 
 if __name__ == '__main__':
-    config = SiglipVisionConifg()
+    config = SiglipVisionConfig()
     model = SiglipVisionModel(config)
 
     img = torch.randn((10, 3, 224, 224)).to("cuda")
