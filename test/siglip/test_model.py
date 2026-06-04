@@ -47,3 +47,10 @@ def test_model_backprop(model):
     for name, param in model.named_parameters():
         assert param.grad is not None, f"no gradient for {name}"
         assert torch.isfinite(param.grad).all(), f"NaN gradient in {name}"
+
+def test_output_nan(model):
+    device = "cuda"
+    x = torch.randn(2, 3, 224, 224).to(device)
+
+    out = model(x)
+    assert torch.isfinite(out).all()

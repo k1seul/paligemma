@@ -13,7 +13,7 @@ def test_model_create(model):
     n_params = sum(p.numel() for p in model.parameters())
     print(f"embedding model parameters: {n_params}")
 
-    assert n_params < 500_000_000
+    assert 500_000 < n_params < 900_000
 
 def test_forward_shape(model):
     device = "cuda"
