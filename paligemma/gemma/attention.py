@@ -25,7 +25,7 @@ def apply_rotary_emb(x : torch.Tensor, freqs_cis : torch.Tensor):
         )
     ) # (batch_size, seq_len, head_dim, hidden_dim // 2, 2) --> complex (batch_size, seq_len, head_dim, hidden_dim // 2 )
 
-    freqs_cis = freqs_cis.unsqueeze(0).unsqueeze(2)
+    freqs_cis = freqs_cis.unsqueeze(0).unsqueeze(1)
     x_rot = x_complex * freqs_cis
     x_out = torch.view_as_real(x_rot).flatten(-2)
 
@@ -42,6 +42,8 @@ class GemmaAttention(nn.Module):
         self.num_key_value_head = config.num_key_value_heads
         self.head_dim = self.emb_dim // self.num_query_heads
         self.kv_emb_dim = self.head_dim * self.num_key_value_head
+        self.scale = self.head_dim ** -0.5
+        self.num_groups = self.num_query_heads // self.num_key_value_head
 
         assert self.emb_dim % self.num_query_heads == 0
 
@@ -50,14 +52,51 @@ class GemmaAttention(nn.Module):
         self.v_proj = nn.Linear(self.emb_dim, self.kv_emb_dim)
         self.out_proj = nn.Linear(self.emb_dim, self.emb_dim)
 
-    def forward(self, hidden_states : torch.Tensor) -> torch.Tensor:
-        pass
+        self.register_buffer('freqs_cis', precompute_freqs_cis(self.config.head_dim, self.config.max_position_embeddings, self.config.rope_theta))
+
+    def forward(self, hidden_states : torch.Tensor, k_cache : torch.Tensor | None = None, v_cache : torch.Tensor | None = None, attention_mask : torch.Tensor | None = None) -> tuple:
+        batch_size, num_tokens, _ = hidden_states.shape
+        cache_len = 0 if k_cache is None else k_cache.shape[2]
+
+        k_states = self.k_proj(hidden_states)
+        q_states = self.q_proj(hidden_states)
+        v_states = self.v_proj(hidden_states)
+        
+        k_states = k_states.reshape(batch_size, num_tokens, self.num_key_value_head, self.head_dim)
+        k_states= k_states.repeat_interleave(self.num_groups, dim=2).transpose(1, 2)
+        q_states = q_states.reshape((batch_size, num_tokens, self.num_query_heads, self.head_dim)).transpose(1, 2)
+        v_states = v_states.reshape(batch_size, num_tokens, self.num_key_value_head, self.head_dim)
+        v_states = v_states.repeat_interleave(self.num_groups, dim=2).transpose(1, 2)
+
+        freq_cis = self.freqs_cis[cache_len : cache_len + num_tokens]
+        k_states = apply_rotary_emb(k_states, freq_cis)
+        q_states = apply_rotary_emb(q_states, freq_cis)
+
+        if k_cache is not None and v_cache is not None:
+            k_states = torch.cat([k_cache, k_states], dim=2)
+            v_states = torch.cat([v_cache, v_states], dim=2)
+
+        key_states_T = k_states.transpose(2, 3)
+        attention_weights = q_states @ key_states_T * self.scale
+
+        if attention_mask is not None:
+            attention_weights += attention_mask
+
+        attention_weights = nn.functional.softmax(attention_weights, dim=-1)
+        attention_outputs = attention_weights @ v_states
+        attention_outputs = attention_outputs.transpose(1, 2).contiguous()
+        attention_outputs = attention_outputs.reshape(batch_size, num_tokens, self.emb_dim)
+
+        attention_outputs = self.out_proj(attention_outputs)
+
+        return attention_outputs, k_states, v_states
 
 
 if __name__ == '__main__':
     device = "cuda"
-    x = torch.randn((100, 200, 8, 256)).to(device)
-    freqs_cis = precompute_freqs_cis(256, 200).to(device)
-    out = apply_rotary_emb(x, freqs_cis)
+    config = GemmaConfig()
+    x = torch.randn((100, 200, 2048)).to(device)
+    attention = GemmaAttention(config).to(device)
+    out = attention(x)
+    print(f"{out[0].shape:}")
 
-    print(out.shape)
