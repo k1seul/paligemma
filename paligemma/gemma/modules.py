@@ -6,22 +6,41 @@ import torch.nn as nn
 class GemmaRMSNorm(nn.Module):
     def __init__(self, config : GemmaConfig):
         super().__init__()
-        self.config = config
+        self.eps = config.rms_norm_eps
 
-        self.weight = nn.Parameter(torch.empty(self.config.hidden_size))
-        self.rms = nn.RMSNorm(self.config.hidden_size, config.rms_norm_eps)
+        self.weight = nn.Parameter(torch.zeros(config.hidden_size))
 
     def forward(self, x : torch.Tensor):
-        rms = self.rms(x)
-        return x / rms * (1 + self.weight)
+        x_float = x.float()
+        normed = x_float * torch.rsqrt(x_float.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        out = normed * (1.0 + self.weight.float())
+
+        return out.to(dtype=x.dtype)
+
+class GemmaMLP(nn.Module):
+    def __init__(self, config : GemmaConfig):
+        super().__init__()
+        self.config = config
+
+        self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+
+    def forward(self, x : torch.Tensor) -> torch.Tensor:
+        output = (self.up_proj(x) * nn.functional.gelu(self.gate_proj(x)))
+
+        return self.down_proj(output)
 
 
 if __name__ == '__main__':
     default_config = GemmaConfig()
-    x = torch.randn((100, default_config.hidden_size))
-    rms_norm = GemmaRMSNorm(default_config)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    x = torch.randn((100, default_config.hidden_size)).to(device)
+    rms_norm = GemmaRMSNorm(default_config).to(device)
+    mlp = GemmaMLP(default_config).to(device)
 
     out = rms_norm(x)
+    out = mlp(out)
 
     print(f"{x:} \n {out:}")
     print(f"x shape : {x.shape}, out shape : {out.shape}")

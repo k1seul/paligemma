@@ -460,11 +460,11 @@ def load_hf_model(model_path: str, device: str):
 - [X] 1-6 SiglipVisionModel + shape verification
 
 ### CHAPTER 2 — Gemma
-- [ ] 2-1 GemmaConfig
-- [ ] 2-2 GemmaRMSNorm
-- [ ] 2-3 RoPE (precompute + apply)
-- [ ] 2-4 GemmaAttention (GQA + KV Cache)
-- [ ] 2-5 GemmaMLP (GeGLU)
+- [X] 2-1 GemmaConfig
+- [X] 2-2 GemmaRMSNorm
+- [X] 2-3 RoPE (precompute + apply)
+- [X] 2-4 GemmaAttention (GQA + KV Cache)
+- [X] 2-5 GemmaMLP (GeGLU)
 - [ ] 2-6 GemmaModel + GemmaForCausalLM
 
 ### CHAPTER 3 — Integration
