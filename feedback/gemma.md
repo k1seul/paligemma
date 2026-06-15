@@ -1,178 +1,162 @@
-# Gemma Implementation Feedback (v3)
+# Gemma Implementation Feedback (v4)
 
-> v2(79점) → v3. 코드 품질 측면에서 의미있는 진전이 있었지만, `k`에 RoPE가 전혀 적용되지 않는 regression이 생겼다.
+> v3(82점) → v4. Critical 버그 3개 모두 수정, kv_cache 테스트 추가. 수학 정확도가 11 → 17로 회복됐다.
 
-## 점수: 82 / 100
+## 점수: 91 / 100
 
-| 항목 | v2 | v3 | 변화 이유 |
+| 항목 | v3 | v4 | 변화 이유 |
 |---|---|---|---|
 | 전체 아키텍처 이해 (20) | 19 | 19 | 변화 없음 |
-| 수학/알고리즘 정확도 (20) | 13 | 11 | k에 RoPE 없음(regression), cache concat dead code |
+| 수학/알고리즘 정확도 (20) | 11 | 17 | k RoPE 복구, cache concat 살아남, GELU variant 미세 차이 잔존 |
 | API 설계 (20) | 18 | 18 | 변화 없음 |
-| 코드 품질 (20) | 15 | 18 | bias=False 수정, shadowing 수정, device hardcoding 수정 |
-| 테스트 (20) | 14 | 16 | OOM 배치 크기 수정 |
+| 코드 품질 (20) | 18 | 18 | `apply_rotary_emb` 주석 오류 잔존 |
+| 테스트 (20) | 16 | 19 | kv_cache shape·consistency 테스트 추가 |
 
 ---
 
-## v2 대비 잘 고친 것들
+## 점수 히스토리
 
-- `MLP bias=False` 추가 (`modules.py:25-27`) — 체크포인트 로드 시 shape mismatch 해결
-- `new_kv_cache` 변수명 사용 (`decoder.py:20`) — 입력값 shadowing 제거
-- 테스트 배치 크기 `(100, 50)` → `(4, 50)` — OOM 방지
-- `__main__` 전체에 `"cuda" if torch.cuda.is_available() else "cpu"` 적용
+| 리뷰 | 종합 | 비고 |
+|------|------|------|
+| v2 (2026-06-12) | 79 | MLP bias=False 누락, OOM 배치, shadowing |
+| v3 (2026-06-12) | 82 | 코드 품질 개선, but k RoPE regression |
+| v4 (2026-06-15) | 91 | Critical 3개 모두 수정, kv_cache 테스트 추가 |
 
 ---
 
-## 남은 버그 목록
+## v3 대비 잘 고친 것들
 
-### 🔴 Critical — attention의 k에 RoPE가 전혀 없음 (regression)
+### ✅ k에 RoPE 적용 (Critical 수정)
 
-**파일:** `paligemma/gemma/attention.py:67-81`
-
-현재 코드를 실행 순서대로 추적하면:
+**파일:** `paligemma/gemma/attention.py:66-68`
 
 ```python
 k_states = k_states.reshape(batch_size, num_tokens, self.num_key_value_head, self.head_dim)
-k_origin = k_states.transpose(1, 2)           # (B, kv_heads, T, head_dim) — pre-RoPE 저장
-k_states = apply_rotary_emb(k_states, freq_cis)  # ← (B, T, kv_heads, head_dim)에 잘못 적용
-                                               #   freqs_cis broadcasting이 잘못되어
-                                               #   결과가 (B, T, T, head_dim)으로 오염됨
-# ... kv_cache concat ...
-k_states = k_origin.repeat_interleave(self.num_groups, dim=1)  # ← k_origin (pre-RoPE!)으로 덮어씀
-                                                                #   위 cat 결과는 버려짐
+k_states = k_states.transpose(1, 2)          # (B, kv_heads, T, head_dim)
+k_states = apply_rotary_emb(k_states, freq_cis)  # ← 올바른 shape에서 RoPE 적용
 ```
 
-**실제로 attention에 들어가는 k는 `k_origin`으로, RoPE가 전혀 없다.**
-q에는 RoPE가 있고 k에는 없으니 dot-product에서 위치 정보가 아예 사용되지 않는다.
+transpose 이후 올바른 shape에서 RoPE를 적용한다. v3의 regression이 완전히 해결됐다.
 
-v2에서는 `k_origin.repeat_interleave` → `apply_rotary_emb` 순서라 비효율적이었지만 RoPE는 적용됐다. 현재 코드는 그보다 오히려 퇴보.
-
-**수정 방법:**
-
-```python
-# 1. k/v는 kv_heads 해상도에서 transpose 후 RoPE 적용
-k_states = k_states.reshape(batch_size, num_tokens, self.num_key_value_head, self.head_dim)
-k_states = k_states.transpose(1, 2)              # (B, kv_heads, T, head_dim)
-k_states = apply_rotary_emb(k_states, freq_cis)  # ← 올바른 shape, RoPE 적용
-
-# 2. cache concat (RoPE 이후, expand 이전)
-if kv_cache is not None:
-    k_cache, v_cache = kv_cache
-    k_states = torch.cat([k_cache, k_states], dim=2)
-    v_states = torch.cat([v_cache, v_states], dim=2)
-
-# 3. concat 이후에 expand
-k_expanded = k_states.repeat_interleave(self.num_groups, dim=1)
-v_expanded = v_states.repeat_interleave(self.num_groups, dim=1)
-
-# 4. expand 이전 (kv_heads 레벨) 상태로 캐시 저장
-return attention_outputs, (k_states, v_states)
-```
-
----
-
-### 🔴 Critical — kv_cache concat이 dead code
+### ✅ kv_cache concat이 live code로 복구 (Critical 수정)
 
 **파일:** `paligemma/gemma/attention.py:75-81`
 
 ```python
 if kv_cache is not None:
     k_cache, v_cache = kv_cache
-    k_states = torch.cat([k_cache, k_states], dim=2)  # 결과가 다음 줄에서 바로 덮어써짐
-    v_states = torch.cat([v_cache, v_states], dim=2)  # 결과가 다음 줄에서 바로 덮어써짐
+    k_states = torch.cat([k_cache, k_states], dim=2)  # RoPE 이후, expand 이전
+    v_states = torch.cat([v_cache, v_states], dim=2)
 
-k_states = k_origin.repeat_interleave(...)  # ← k_states 완전 교체
-v_states = v_origin.repeat_interleave(...)  # ← v_states 완전 교체
+k_expanded = k_states.repeat_interleave(self.num_groups, dim=1)  # concat 이후 expand
+v_expanded = v_states.repeat_interleave(self.num_groups, dim=1)
 ```
 
-kv_cache가 있어도 없어도 결과가 동일 — autoregressive generation이 작동하지 않는다.
-위 Critical 1번 수정 방법대로 고치면 이 버그도 함께 해결된다.
+순서가 정확히 맞다: RoPE → concat → expand → cache 저장.
 
----
-
-### 🟠 High — kv_cache에 pre-RoPE k 저장
+### ✅ post-RoPE 상태로 cache 저장 (High 수정)
 
 **파일:** `paligemma/gemma/attention.py:96`
 
 ```python
-return attention_outputs, (k_origin, v_origin)  # k_origin은 RoPE 없는 상태
+return attention_outputs, (k_states, v_states)  # k_states는 post-RoPE, pre-expand 상태
 ```
 
-1번 수정과 세트로 해결된다. 캐시는 RoPE 적용 이후 상태로 저장해야 한다.
+kv_heads 레벨 (expand 이전) 저장이라 다음 pass에서 concat 후 expand할 수 있다.
 
----
-
-### 🟡 Medium — `if kv_caches:` falsy check
+### ✅ kv_caches falsy check 수정
 
 **파일:** `paligemma/gemma/model.py:24`
 
 ```python
-kv_cache = kv_caches[i] if kv_caches else None
+cache_len = kv_caches[0][0].shape[2] if kv_caches is not None else 0  # ← is not None
 ```
 
-`kv_caches`가 빈 리스트 `[]`이면 `False`로 평가 → 캐시가 있어도 None으로 취급.
-
-```python
-kv_cache = kv_caches[i] if kv_caches is not None else None
-```
-
----
-
-### 🟡 Medium — kv_cache 테스트 없음
+### ✅ kv_cache 테스트 추가
 
 **파일:** `test/gemma/test_gemma_model.py`
 
-현재 테스트는 single-pass forward만 검증한다. Autoregressive generation이 핵심 기능인데 다음 케이스가 없다:
-
 ```python
-def test_kv_cache_shape(model):
-    device = "cuda"
-    input_ids = torch.randint(0, 30000, (2, 5)).to(device)
-    _, caches = model(input_ids)
-    assert len(caches) == model.config.num_hidden_layers
-    assert caches[0][0].shape[2] == 5  # T_prev == 5
-
-def test_kv_cache_consistency(model):
-    # cache 사용 결과가 full context 결과와 일치해야 함
-    device = "cuda"
-    input_ids = torch.randint(0, 30000, (2, 6)).to(device)
-    model.eval()
-    with torch.no_grad():
-        full_out, _ = model(input_ids)
-        step_out, caches = model(input_ids[:, :5])
-        next_out, _ = model(input_ids[:, 5:], kv_cache=caches)
-    assert torch.allclose(full_out[:, 5:], next_out, atol=1e-4)
+def test_kv_cache_shape(model): ...      # cache 개수, T 차원 확인
+def test_kv_cache_consistency(model): ... # full_out[:, 5:] == step_out 확인
 ```
+
+v3 feedback에서 제안한 테스트 두 개가 그대로 구현됐다. `test_kv_cache_consistency`가 통과하면 autoregressive generation이 수학적으로 올바르다는 걸 검증한다.
+
+### ✅ 오타 수정
+
+`cahces` → `caches` (model.py:64)
 
 ---
 
-### 🟢 Minor — `__main__` 변수 오타
+## 남은 이슈
 
-**파일:** `paligemma/gemma/model.py:56`
+### 🟡 Medium — GELU variant 불일치
+
+**파일:** `paligemma/gemma/modules.py:30`
 
 ```python
-out, cahces = model(input_ids)  # cahces → caches
+output = (self.up_proj(x) * nn.functional.gelu(self.gate_proj(x)))
+#                                               ↑ 기본값 = exact GELU
 ```
+
+Gemma 스펙은 `gelu_pytorch_tanh` (tanh 근사)를 사용한다.
+
+```python
+# 수정
+nn.functional.gelu(self.gate_proj(x), approximate='tanh')
+```
+
+수치 차이는 작아서 silent failure이고, 사전학습 가중치 로드 시 미세하게 틀린 결과를 낸다.
+
+---
+
+### 🟢 Minor — `apply_rotary_emb` 주석이 틀림
+
+**파일:** `paligemma/gemma/attention.py:26`
+
+```python
+) # (batch_size, seq_len, head_dim, hidden_dim // 2, 2) --> ...
+```
+
+실제 shape은 `(batch_size, num_head, seq_len, head_dim//2, 2)` — `seq_len`과 `num_head` 순서가 바뀌어 있다. 현재 입력이 `(B, num_head, seq_len, head_dim)`인데 주석이 v2 시절 순서를 그대로 반영하고 있다.
+
+---
+
+### 🟢 Minor — `__main__` 배치 크기 OOM 위험
+
+**파일:** `paligemma/gemma/attention.py:102`, `paligemma/gemma/decoder.py:32`
+
+```python
+x = torch.randn((100, 200, 2048))  # attention.py: B=100, T=200 — OOM 위험
+x = torch.randn((100, 200, ...))   # decoder.py:   동일
+```
+
+테스트는 배치 2~4로 수정됐는데 `__main__` 블록은 아직 100. `(2, 50, 2048)` 수준으로 낮추면 충분하다.
+
+---
+
+### 🟢 Minor — `kv_cache` / `kv_caches` 이름 불일치
+
+**파일:** `model.py:17, 47`
+
+`GemmaForCausalLM.forward`의 파라미터는 `kv_cache` (단수), `GemmaModel.forward`는 `kv_caches` (복수). 동작에는 무관하지만 API를 읽는 사람이 헷갈린다.
 
 ---
 
 ## 수정 우선순위
 
 ```
-1. attention.py:67-81  k RoPE 없음 + dead cache code  ← inference 전체 망가짐, 최우선
-2. attention.py:96     pre-RoPE cache 저장             ← 1번 수정과 세트
-3. model.py:24         kv_caches falsy check            ← cache 로직 전반 신뢰성
-4. test/gemma/         kv_cache 테스트 추가             ← 수정 검증 필수
-5. model.py:56         오타                             ← trivial
+1. modules.py:30   GELU approximate='tanh' 추가   ← 스펙 정확도
+2. attention.py:26 apply_rotary_emb 주석 수정     ← 혼동 방지
+3. attention.py:102, decoder.py:32  __main__ 배치 크기  ← trivial
+4. model.py:17/47  kv_cache 이름 통일            ← trivial
 ```
 
 ---
 
 ## 전체 평가
 
-코드 품질 면에서 확실한 진전 — `bias=False`, 변수 shadowing, device hardcoding이 모두 해결됐다.
-그러나 attention 로직을 손대면서 v2에선 비효율적으로나마 작동하던 k RoPE가 완전히 사라졌다.
-현재 모델은 q에만 위치 정보가 있고 k에는 없어서, attention score에 위치가 전혀 반영되지 않는다.
+Critical 3개 (k RoPE, dead cache concat, pre-RoPE 저장)가 한 번에 깔끔하게 수정됐고, kv_cache consistency 테스트까지 추가해서 수학적 정확성이 검증된다. 91점은 학습 목적 구현으로서 매우 높은 수준이다.
 
-Critical 2개(k RoPE + dead cache code)가 사실상 한 묶음이니, 수정 방법 섹션대로 attention.py를 고치면
-수학/알고리즘 점수가 11 → 17 이상으로 오르고 총점도 88점대로 올라갈 것이다.
+남은 이슈 중 실질적으로 의미 있는 건 GELU variant 하나뿐이고, 나머지는 모두 사소하다. GELU를 고치면 93점 수준으로 올라간다.

@@ -465,7 +465,7 @@ def load_hf_model(model_path: str, device: str):
 - [X] 2-3 RoPE (precompute + apply)
 - [X] 2-4 GemmaAttention (GQA + KV Cache)
 - [X] 2-5 GemmaMLP (GeGLU)
-- [ ] 2-6 GemmaModel + GemmaForCausalLM
+- [X] 2-6 GemmaModel + GemmaForCausalLM
 
 ### CHAPTER 3 — Integration
 - [ ] 3-1 MultiModalProjector
