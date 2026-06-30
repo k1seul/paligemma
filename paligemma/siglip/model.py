@@ -31,7 +31,7 @@ class SiglipVisionModel(SiglipVisionTransformer):
 
 if __name__ == '__main__':
     config = SiglipVisionConfig()
-    model = SiglipVisionModel(config)
+    model = SiglipVisionModel(config).to("cuda")
 
     img = torch.randn((10, 3, 224, 224)).to("cuda")
     print(model(img).shape)

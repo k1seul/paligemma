@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 @dataclass
 class GemmaConfig:
-    vocab_size : int = 42000
+    vocab_size : int = 300000
     hidden_size : int = 1024
     intermediate_size : int = 4096
     num_hidden_layers : int = 8

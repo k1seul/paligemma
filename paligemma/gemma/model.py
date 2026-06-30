@@ -14,11 +14,27 @@ class GemmaModel(nn.Module):
         self.layers = nn.ModuleList([GemmaDecoderLayer(config) for _ in range(self.config.num_hidden_layers)])
         self.rms_norm = GemmaRMSNorm(config)
 
-    def forward(self, input_ids : torch.Tensor, kv_caches = None, attention_mask : torch.Tensor | None = None):
-        x = self.embed_tokens(input_ids)
+    def forward(self, input_ids : torch.Tensor | None, input_embedding : torch.Tensor | None, kv_caches = None, attention_mask : torch.Tensor | None = None):
+        """
+        Gemma takes two inputs
+        input_ids : torch.Tensor (int/long) types;
+            These are the tokenized integer indices.
+            self.embedding is used to get the embedded tensors
+        input_embedding : torch.Tensor;
+            These are already embedded tensors.
+            Directly pass though the transformer layers in this case.
+        """
+
+        if input_ids is not None and input_embedding is not None:
+            raise ValueError("Only one of the input_ids and input_embedding should be passed here.")
+
+        if input_embedding is None:
+            x = self.embed_tokens(input_ids)
+        else:
+            x = input_embedding
         x = x * math.sqrt(self.config.hidden_size)
 
-        _, seq_len = input_ids.shape
+        _, seq_len, _ = x.shape
 
         if attention_mask is None:
             cache_len = kv_caches[0][0].shape[2] if kv_caches is not None else 0
@@ -44,8 +60,8 @@ class GemmaForCausalLM(nn.Module):
         self.lm_head = nn.Linear(self.config.hidden_size, self.config.vocab_size, bias=False)
         self.lm_head.weight = self.model.embed_tokens.weight
 
-    def forward(self, input_ids : torch.Tensor, kv_cache = None, attention_mask : torch.Tensor | None = None):
-        out, new_caches = self.model(input_ids, kv_cache, attention_mask)
+    def forward(self, input_ids : torch.Tensor | None = None, input_embedding : torch.Tensor | None = None, kv_cache = None, attention_mask : torch.Tensor | None = None):
+        out, new_caches = self.model(input_ids, input_embedding, kv_cache, attention_mask)
 
         return self.lm_head(out), new_caches
 
