@@ -468,12 +468,12 @@ def load_hf_model(model_path: str, device: str):
 - [X] 2-6 GemmaModel + GemmaForCausalLM
 
 ### CHAPTER 3 — Integration
-- [ ] 3-1 MultiModalProjector
-- [ ] 3-2 PaliGemmaProcessor
-- [ ] 3-3 PaliGemmaForConditionalGeneration
+- [X] 3-1 MultiModalProjector
+- [X] 3-2 PaliGemmaProcessor
+- [X] 3-3 PaliGemmaForConditionalGeneration
 
 ### CHAPTER 4 — Inference
-- [ ] 4-1 KVCache
+- [X] 4-1 KVCache
 - [ ] 4-2 generate() function
 - [ ] 4-3 Load HF weights and run real inference
 

@@ -1,5 +1,6 @@
 from paligemma.gemma.config import GemmaConfig
 from paligemma.gemma.model import GemmaForCausalLM
+from paligemma.gemma.kvcache import KVCache
 import pytest
 import torch
 
@@ -23,7 +24,7 @@ def test_forward_shape(model):
         (4, 50)
     ).to(device)
 
-    output, _ = model(input_ids)
+    output = model(input_ids)
 
     assert output.shape == (4, 50, model.config.vocab_size)
 
@@ -37,8 +38,8 @@ def test_deterministic_in_eval(model):
     model.eval()
 
     with torch.no_grad():
-        output1, _ = model(input_ids)
-        output2, _ = model(input_ids)
+        output1 = model(input_ids)
+        output2 = model(input_ids)
 
     assert torch.allclose(output1, output2)
 
@@ -52,7 +53,7 @@ def test_model_backprop(model):
 
     optimizer = torch.optim.Adam(model.parameters())
     optimizer.zero_grad()
-    out, _ = model(input_ids)
+    out = model(input_ids)
     
     loss = torch.nn.functional.mse_loss(out, torch.zeros_like(out))
     loss.backward()
@@ -69,25 +70,26 @@ def test_output_nan(model):
         (4, 50)
     ).to(device)
 
-    out, _ = model(input_ids)
+    out = model(input_ids)
     assert torch.isfinite(out).all() 
 
 def test_kv_cache_shape(model):
     device = "cuda"
     input_ids = torch.randint(0, 30000, (2, 5)).to(device)
-    _, caches = model(input_ids)
+    kvcache = KVCache()
+    _ = model(input_ids, kv_cache=kvcache)
 
-    assert len(caches) == model.config.num_hidden_layers
-    assert caches[0][0].shape[2] == 5
+    assert kvcache.num_items == 5
 
 def test_kv_cache_consistency(model):
     device = "cuda"
     input_ids = torch.randint(0, 30000, (2, 6)).to(device)
     model.eval()
+    kvcache = KVCache()
 
     with torch.no_grad():
-        full_out, _ =  model(input_ids)
-        step_out, caches = model(input_ids[:, :5])
-        next_out, _ = model(input_ids[:, 5:], kv_cache=caches)
+        full_out =  model(input_ids)
+        _ = model(input_ids[:, :5], kv_cache=kvcache)
+        next_out = model(input_ids[:, 5:], kv_cache=kvcache)
 
     assert torch.allclose(full_out[:, 5:], next_out, atol=1e-4)

@@ -1,4 +1,5 @@
 from paligemma.gemma.config import GemmaConfig
+from paligemma.gemma.kvcache import KVCache
 import torch
 import torch.nn as nn
 
@@ -33,9 +34,10 @@ def apply_rotary_emb(x : torch.Tensor, freqs_cis : torch.Tensor):
 
 
 class GemmaAttention(nn.Module):
-    def __init__(self, config : GemmaConfig):
+    def __init__(self, config : GemmaConfig, layer_index : int):
         super().__init__()
         self.config = config
+        self.layer_index = layer_index
 
         self.emb_dim = config.hidden_size
         self.num_query_heads = config.num_attention_heads
@@ -52,11 +54,10 @@ class GemmaAttention(nn.Module):
         self.v_proj = nn.Linear(self.emb_dim, self.kv_emb_dim, bias=False)
         self.out_proj = nn.Linear(self.emb_dim, self.emb_dim, bias=False)
 
-        self.register_buffer('freqs_cis', precompute_freqs_cis(self.head_dim, self.config.max_position_embeddings, self.config.rope_theta))
+        self.register_buffer('freqs_cis', precompute_freqs_cis(self.head_dim, self.config.max_position_embeddings, self.config.rope_theta), persistent=False)
 
-    def forward(self, hidden_states : torch.Tensor, kv_cache : tuple | None = None, attention_mask : torch.Tensor | None = None) -> tuple:
+    def forward(self, hidden_states : torch.Tensor, kv_cache : KVCache | None = None, attention_mask : torch.Tensor | None = None, cache_len : int = 0) -> torch.Tensor:
         batch_size, num_tokens, _ = hidden_states.shape
-        cache_len = 0 if kv_cache is None else kv_cache[0].shape[2]
 
         k_states = self.k_proj(hidden_states)
         q_states = self.q_proj(hidden_states)
@@ -73,9 +74,7 @@ class GemmaAttention(nn.Module):
 
 
         if kv_cache is not None:
-            k_cache, v_cache = kv_cache
-            k_states = torch.cat([k_cache, k_states], dim=2)
-            v_states = torch.cat([v_cache, v_states], dim=2)
+            k_states, v_states = kv_cache.update(k_states, v_states, self.layer_index)
 
         k_expanded = k_states.repeat_interleave(self.num_groups, dim=1)
         v_expanded = v_states.repeat_interleave(self.num_groups, dim=1)
@@ -93,14 +92,14 @@ class GemmaAttention(nn.Module):
 
         attention_outputs = self.out_proj(attention_outputs)
 
-        return attention_outputs, (k_states, v_states)
+        return attention_outputs
 
 
 if __name__ == '__main__':
     device = "cuda" if torch.cuda.is_available() else "cpu"
     config = GemmaConfig()
-    x = torch.randn((100, 200, 2048)).to(device)
-    attention = GemmaAttention(config).to(device)
+    x = torch.randn((100, 200, 1024)).to(device)
+    attention = GemmaAttention(config, 1).to(device)
     out = attention(x)
     print(f"{out[0].shape:}")
 

@@ -21,7 +21,7 @@ def test_forward_shape(model_and_processor):
     model, processor = model_and_processor
     img = Image.fromarray(np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8))
     out = processor("describe this image", img)
-    logits, _ = model(out["input_ids"].cuda(), out["pixel_values"].cuda())
+    logits = model(out["input_ids"].cuda(), out["pixel_values"].cuda())
 
     assert logits.shape[0] == 1
     assert logits.shape[2] == model.config.text_config.vocab_size
@@ -53,9 +53,9 @@ def test_image_tokens_at_start(model_and_processor):
     ids = out["input_ids"][0]
     image_token_id = model.config.img_token_id
     image_positions = (ids == image_token_id).nonzero(as_tuple=True)[0]
-    assert image_positions[0].item() == 1 # Check if the first token is image (the first token is always the <bos> token)
-    assert image_positions[-1].item() == 196 # Check if the 196th token is image
-    assert (ids[197:] != image_token_id).all() # Check if the rest is not image token
+    assert image_positions[0].item() == 0
+    assert image_positions[-1].item() == 195 # Check if the 196th token is image
+    assert (ids[196:] != image_token_id).all() # Check if the rest is not image token
 
 def test_eval_model_deterministic(model_and_processor):
     model, processor = model_and_processor
@@ -64,8 +64,8 @@ def test_eval_model_deterministic(model_and_processor):
     out = processor("test", img)
     ids, pv = out["input_ids"].cuda(), out["pixel_values"].cuda()
     with torch.no_grad():
-        logits1, _ = model(ids, pv)
-        logits2, _ = model(ids, pv)
+        logits1 = model(ids, pv)
+        logits2 = model(ids, pv)
 
     assert torch.allclose(logits1, logits2)
 
@@ -75,5 +75,5 @@ def test_batch_size_2(model_and_processor):
     outs = [processor("test", img) for img in imgs]
     input_ids = torch.cat([out["input_ids"] for out in outs], dim=0).cuda()
     pixel_values = torch.cat([out["pixel_values"] for out in outs], dim=0).cuda()
-    logits, _ = model(input_ids, pixel_values)
+    logits = model(input_ids, pixel_values)
     assert logits.shape[0] == 2

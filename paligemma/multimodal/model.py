@@ -22,13 +22,13 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         image_tokens_mask = (input_ids == self.config.img_token_id)
         text_embedding[image_tokens_mask] = image_embedding.reshape(-1, image_embedding.shape[-1])
 
-        output, kv_cache = self.language_model(
+        output = self.language_model(
             input_embedding=text_embedding,
             kv_cache=kv_cache,
             attention_mask=attention_mask,
         )
         
-        return output, kv_cache
+        return output
 
 
 if __name__ == '__main__':

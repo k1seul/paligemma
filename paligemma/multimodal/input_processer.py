@@ -19,7 +19,7 @@ class PaliGemmaProcessor:
 
         self.num_image_tokens = num_image_tokens
 
-    def __call__(self, text, images, max_length=None):
+    def __call__(self, text, images):
 
         pixel_values = self.preprocess(images)
         
@@ -28,13 +28,12 @@ class PaliGemmaProcessor:
 
         image_tokens = IMAGE_TOKENS * self.num_image_tokens
 
-        prompt = image_tokens + text
+        prompt = image_tokens + self.tokenizer.bos_token + text + "\n"
 
         encoded = self.tokenizer(
             prompt,
             return_tensors="pt",
-            truncation=True,
-            max_length=max_length
+            add_special_tokens=False
         )
 
         return {
