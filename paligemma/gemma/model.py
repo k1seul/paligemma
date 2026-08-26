@@ -15,7 +15,7 @@ class GemmaModel(nn.Module):
         self.layers = nn.ModuleList([GemmaDecoderLayer(config, i) for i in range(self.config.num_hidden_layers)])
         self.rms_norm = GemmaRMSNorm(config)
 
-    def forward(self, input_ids : torch.Tensor | None, input_embedding : torch.Tensor | None, kv_cache : KVCache | None = None, attention_mask : torch.Tensor | None = None):
+    def forward(self, input_ids : torch.Tensor | None, input_embedding : torch.Tensor | None, kv_cache : KVCache | None = None, attention_mask : torch.Tensor | None = None, num_items : int = 0):
         """
         Gemma takes two inputs
         input_ids : torch.Tensor (int/long) types;
@@ -36,7 +36,7 @@ class GemmaModel(nn.Module):
         x = x * math.sqrt(self.config.hidden_size)
 
         _, seq_len, _ = x.shape
-        cache_len = kv_cache.num_items if kv_cache else 0
+        cache_len = num_items
 
         if attention_mask is None:
             causal_mask = torch.full((seq_len, seq_len), float('-inf'), device=x.device, dtype=x.dtype).triu(1)
@@ -58,7 +58,8 @@ class GemmaForCausalLM(nn.Module):
         self.lm_head.weight = self.model.embed_tokens.weight
 
     def forward(self, input_ids : torch.Tensor | None = None, input_embedding : torch.Tensor | None = None, kv_cache : KVCache | None = None, attention_mask : torch.Tensor | None = None):
-        out = self.model(input_ids, input_embedding, kv_cache, attention_mask)
+        num_items = kv_cache.num_items if kv_cache else 0
+        out = self.model(input_ids, input_embedding, kv_cache, attention_mask, num_items)
 
         return self.lm_head(out)
 

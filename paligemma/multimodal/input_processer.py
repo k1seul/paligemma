@@ -56,7 +56,7 @@ if __name__ == '__main__':
 
     paligemma_processor = PaliGemmaProcessor(
         tokenizer=tokenizer,
-        num_image_tokens=196,
+        num_image_tokens=(16) ** 2,
         image_size=224,
     )
 

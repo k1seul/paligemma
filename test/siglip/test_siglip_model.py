@@ -1,56 +1,53 @@
-from paligemma.siglip.config import SiglipVisionConfig
-from paligemma.siglip.model import SiglipVisionModel
-import pytest
 import torch
 
-@pytest.fixture
-def model():
+def test_model_create(siglipmodel):
+    n_params = sum(p.numel() for p in siglipmodel.parameters())
+    print(f"siglipmodel parameters: {n_params}")
+
+    assert 400_000_000 < n_params < 430_000_000
+
+def test_forward_shape(siglipmodel):
     device = "cuda"
-    default_config = SiglipVisionConfig()
-    return SiglipVisionModel(default_config).to(device)
+    config = siglipmodel.config
+    num_patches = (config.image_size // config.patch_size) ** 2
+    input_image = torch.randn(4, 3, config.image_size, config.image_size).to(device)
 
-def test_model_create(model):
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"embedding model parameters: {n_params}")
+    with torch.no_grad():
+        output = siglipmodel(input_image)
 
-    assert 85_000_000 < n_params < 90_000_000
+    assert output.shape == (4, num_patches, config.hidden_size)
 
-def test_forward_shape(model):
+def test_deterministic_in_eval(siglipmodel):
     device = "cuda"
-    input_image = torch.randn(30, 3, 224, 224).to(device)
-    output = model(input_image)
-
-    assert output.shape == (30, 196, 768)
-
-def test_deterministic_in_eval(model):
-    device = "cuda"
-    model.to(device)
-    model.eval()
+    siglipmodel.eval()
     x = torch.randn(2, 3, 224, 224).to(device)
     with torch.no_grad():
-        out1 = model(x)
-        out2 = model(x)
+        out1 = siglipmodel(x)
+        out2 = siglipmodel(x)
 
     assert torch.allclose(out1, out2)
 
-def test_model_backprop(model):
+def test_model_backprop(siglipmodel):
     device = "cuda"
-    model.train()
+    siglipmodel.train()
     x = torch.randn(2, 3, 224, 224).to(device)
 
-    optimizer = torch.optim.Adam(model.parameters())
-    optimizer.zero_grad()
-    out = model(x)
+    out = siglipmodel(x)
     loss = torch.nn.functional.mse_loss(out, torch.zeros_like(out))
     loss.backward()
 
-    for name, param in model.named_parameters():
-        assert param.grad is not None, f"no gradient for {name}"
-        assert torch.isfinite(param.grad).all(), f"NaN gradient in {name}"
+    try:
+        for name, param in siglipmodel.named_parameters():
+            assert param.grad is not None, f"no gradient for {name}"
+            assert torch.isfinite(param.grad).all(), f"NaN gradient in {name}"
+    finally:
+        siglipmodel.zero_grad(set_to_none=True)
+        torch.cuda.empty_cache()
 
-def test_output_nan(model):
+def test_output_nan(siglipmodel):
     device = "cuda"
     x = torch.randn(2, 3, 224, 224).to(device)
 
-    out = model(x)
+    with torch.no_grad():
+        out = siglipmodel(x)
     assert torch.isfinite(out).all()

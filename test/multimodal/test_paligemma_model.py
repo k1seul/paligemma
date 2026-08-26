@@ -1,21 +1,6 @@
-from paligemma.multimodal.config import PaligemmaConfig, GemmaConfig, SiglipVisionConfig
-from paligemma.multimodal.model import PaliGemmaForConditionalGeneration
-from paligemma.multimodal.input_processer import PaliGemmaProcessor
-from transformers import AutoTokenizer
 from PIL import Image
-import pytest
 import torch
 import numpy as np
-
-
-@pytest.fixture(scope="session")
-def model_and_processor():
-    device = "cuda"
-    config = PaligemmaConfig(GemmaConfig(), SiglipVisionConfig())
-    model = PaliGemmaForConditionalGeneration(config).to(device)
-    tokenizer = AutoTokenizer.from_pretrained("google/paligemma-3b-pt-224")
-    processor = PaliGemmaProcessor(tokenizer, num_image_tokens=196, image_size=224)
-    return model, processor
 
 def test_forward_shape(model_and_processor):
     model, processor = model_and_processor
@@ -30,7 +15,7 @@ def test_image_tokens_replaced(model_and_processor):
     model, processor = model_and_processor
     img = Image.fromarray(np.zeros((224, 224, 3), dtype=np.uint8))
     out = processor("test", img)
-    assert (out["input_ids"] == model.config.img_token_id).sum() == 196
+    assert (out["input_ids"] == model.config.img_token_id).sum() == processor.num_image_tokens
 
 def test_pixel_values_range(model_and_processor):
     _, processor = model_and_processor
@@ -52,10 +37,11 @@ def test_image_tokens_at_start(model_and_processor):
     out = processor("hello", Image.fromarray(np.zeros((224, 224, 3), dtype=np.uint8)))
     ids = out["input_ids"][0]
     image_token_id = model.config.img_token_id
+    num_image_tokens = processor.num_image_tokens
     image_positions = (ids == image_token_id).nonzero(as_tuple=True)[0]
     assert image_positions[0].item() == 0
-    assert image_positions[-1].item() == 195 # Check if the 196th token is image
-    assert (ids[196:] != image_token_id).all() # Check if the rest is not image token
+    assert image_positions[-1].item() == num_image_tokens - 1
+    assert (ids[num_image_tokens:] != image_token_id).all() # the rest is not image token
 
 def test_eval_model_deterministic(model_and_processor):
     model, processor = model_and_processor

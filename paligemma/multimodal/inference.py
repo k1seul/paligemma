@@ -79,7 +79,7 @@ if __name__ == "__main__":
     
     tokenizer = AutoTokenizer.from_pretrained("google/paligemma-3b-pt-224")
     processor = PaliGemmaProcessor(tokenizer=tokenizer,
-                                   num_image_tokens=196,
+                                   num_image_tokens=(224 // siglipconfig.patch_size) ** 2,
                                    image_size=224,)
 
     model = PaliGemmaForConditionalGeneration(config).to("cuda")

@@ -55,7 +55,7 @@ if __name__ == '__main__':
 
     paligemma_processor = PaliGemmaProcessor(
         tokenizer=tokenizer,
-        num_image_tokens=196,
+        num_image_tokens=(224 // siglip_config.patch_size)  ** 2,
         image_size=224,
     )
 
