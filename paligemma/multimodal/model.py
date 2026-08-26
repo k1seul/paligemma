@@ -16,11 +16,12 @@ class PaliGemmaForConditionalGeneration(nn.Module):
 
     def forward(self, input_ids : torch.Tensor, pixel_values : torch.Tensor, kv_cache=None, attention_mask=None):
         text_embedding = self.language_model.model.embed_tokens(input_ids)
-        image_embedding = self.vision_tower(pixel_values)
 
-        image_embedding = self.multi_modal_projector(image_embedding)
-        image_tokens_mask = (input_ids == self.config.img_token_id)
-        text_embedding[image_tokens_mask] = image_embedding.reshape(-1, image_embedding.shape[-1])
+        if pixel_values is not None:
+            image_embedding = self.vision_tower(pixel_values)
+            image_embedding = self.multi_modal_projector(image_embedding)
+            image_tokens_mask = (input_ids == self.config.img_token_id)
+            text_embedding[image_tokens_mask] = image_embedding.reshape(-1, image_embedding.shape[-1])
 
         output = self.language_model(
             input_embedding=text_embedding,
