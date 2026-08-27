@@ -9,7 +9,7 @@ class PaliGemmaProcessor:
     def __init__(self, tokenizer : PreTrainedTokenizer, num_image_tokens : int, image_size : int):
         self.tokenizer = tokenizer
         self.preprocess = transforms.Compose([
-            transforms.Resize((image_size, image_size)),
+            transforms.Resize((image_size, image_size), interpolation=transforms.InterpolationMode.BICUBIC),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=[0.5, 0.5, 0.5],
