@@ -18,20 +18,21 @@ def apply_rotary_emb(x : torch.Tensor, freqs_cis : torch.Tensor):
     freqs_cis : (max_len, hidden_dim // 2) 
     """
 
-    x_complex = torch.view_as_complex(
-        x.reshape(
-            *x.shape[:-1],
-            -1,
-            2
-        )
-    ) # (batch_size, seq_len, head_dim, hidden_dim // 2, 2) --> complex (batch_size, seq_len, head_dim, hidden_dim // 2 )
+    assert x.shape[-1] % 2 == 0
 
-    freqs_cis = freqs_cis.unsqueeze(0).unsqueeze(1)
-    x_rot = x_complex * freqs_cis
-    x_out = torch.view_as_real(x_rot).flatten(-2)
+    seq_len = x.size(-2)
+    freqs_cis = freqs_cis[:seq_len]
 
-    return x_out
+    cos = freqs_cis.real[None, None, :, :]
+    sin = freqs_cis.imag[None, None, :, :]
 
+    x1, x2 = x.chunk(2, dim=-1)
+
+    return torch.cat(
+        (x1 * cos - x2 * sin,
+         x2 * cos + x1 * sin),
+        dim=-1
+    )
 
 class GemmaAttention(nn.Module):
     def __init__(self, config : GemmaConfig, layer_index : int):

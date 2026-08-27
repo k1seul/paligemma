@@ -1,6 +1,7 @@
 from paligemma.gemma.config import GemmaConfig
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class GemmaRMSNorm(nn.Module):
@@ -27,7 +28,7 @@ class GemmaMLP(nn.Module):
         self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
 
     def forward(self, x : torch.Tensor) -> torch.Tensor:
-        output = (self.up_proj(x) * nn.functional.gelu(self.gate_proj(x)))
+        output = (self.up_proj(x) * F.gelu(self.gate_proj(x), approximate="tanh"))
 
         return self.down_proj(output)
 

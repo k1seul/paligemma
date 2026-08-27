@@ -39,10 +39,12 @@ def generate (
     device = next(model.parameters()).device
     encoded["input_ids"] = encoded["input_ids"].to(device)
     encoded["pixel_values"] = encoded["pixel_values"].to(device)
+    prefix_len = encoded["input_ids"].shape[-1]
 
     output = model(input_ids = encoded["input_ids"], 
                           pixel_values = encoded["pixel_values"],
-                          kv_cache=kv_cache)
+                          kv_cache=kv_cache,
+                          prefix_len=prefix_len)
 
     logits = output[:, -1, :]
     logits = logits / temperature
