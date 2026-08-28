@@ -18,25 +18,43 @@ def _release(model):
     del model
     torch.cuda.empty_cache()
 
+def _tiny_gemma():
+    return GemmaConfig(
+        vocab_size=257216,
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=4
+    )
+
+def _tiny_vision():
+    return SiglipVisionConfig(
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layer=2,
+        num_attention_heads=4,
+        patch_size=14
+    )
+
 
 @pytest.fixture(scope="session")
 def gemmamodel():
-    model = GemmaForCausalLM(GemmaConfig()).to(DEVICE)
+    model = GemmaForCausalLM(_tiny_gemma()).to(DEVICE)
     yield model
     _release(model)
 
 
 @pytest.fixture(scope="session")
 def siglipmodel():
-    model = SiglipVisionModel(SiglipVisionConfig()).to(DEVICE)
+    model = SiglipVisionModel(_tiny_vision()).to(DEVICE)
     yield model
     _release(model)
 
 
 @pytest.fixture(scope="session")
 def model_and_processor():
-    vision_config = SiglipVisionConfig()
-    config = PaligemmaConfig(GemmaConfig(), vision_config)
+    vision_config = _tiny_vision()
+    config = PaligemmaConfig(_tiny_gemma(), vision_config)
     model = PaliGemmaForConditionalGeneration(config).to(DEVICE)
 
     tokenizer = AutoTokenizer.from_pretrained("google/paligemma-3b-pt-224")

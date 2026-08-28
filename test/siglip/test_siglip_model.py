@@ -4,7 +4,7 @@ def test_model_create(siglipmodel):
     n_params = sum(p.numel() for p in siglipmodel.parameters())
     print(f"siglipmodel parameters: {n_params}")
 
-    assert 400_000_000 < n_params < 430_000_000
+    assert 300_000 < n_params < 400_000
 
 def test_forward_shape(siglipmodel):
     device = "cuda"

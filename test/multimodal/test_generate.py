@@ -11,7 +11,7 @@ def test_generate_return(model_and_processor):
 
     output = generate(model, processor, prompt, image, max_new_tokens=5)
 
-    assert len(output[0]) == 5
+    assert len(output) == 5
 
 def test_doced_feed_single_token(model_and_processor, monkeypatch):
     model, processor = model_and_processor
@@ -42,7 +42,7 @@ def test_stop_on_eos(model_and_processor, monkeypatch):
 
     output = generate(model, processor, "test", image, max_new_tokens=10)
 
-    assert output[0] == ""
+    assert output == ""
 
 
 def test_greedy_is_deterministic(model_and_processor):

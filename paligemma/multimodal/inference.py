@@ -65,10 +65,10 @@ def generate (
         idx = top_p_sample(logits, top_p) if do_sample else torch.argmax(logits, dim=-1, keepdim=True)
 
     if not generated:
-        return [""]
+        return ""
 
     generated = torch.cat(generated, dim=-1)
-    return processor.tokenizer.decode(generated, skip_special_tokens=True)
+    return processor.tokenizer.decode(generated, skip_special_tokens=True)[0]
 
 if __name__ == "__main__":
     from paligemma.multimodal.config import PaligemmaConfig, GemmaConfig, SiglipVisionConfig

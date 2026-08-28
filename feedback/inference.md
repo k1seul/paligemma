@@ -1,124 +1,37 @@
 # Chapter 4 (Inference) 진행 상황 & 4-3 준비 체크리스트
 
-> 4-1 KVCache 통일, 4-2 `generate()` 구현 완료 시점의 정리.
-> 4-3(사전학습 가중치 로딩)에 들어가기 전에 확인·수정해야 할 항목을 우선순위별로 기록한다.
-> 조사 기준일: 2026-08-26
+> 4-1 KVCache, 4-2 `generate()`, 그리고 prefix-LM mask까지 완료된 시점의 정리.
+> 남은 것은 4-3(사전학습 가중치 로딩)뿐이다.
+> 최초 작성 2026-08-26 · **갱신 2026-08-27**
 
 ---
 
 ## 현재 상태
 
+```
+$ uv run pytest test -q
+31 passed in 13.12s
+```
+
 | 항목 | 상태 | 비고 |
 |---|---|---|
 | 4-1 KVCache | ✅ 완료 | 클래스 + 전 계층 배선 + 정확성 검증 |
 | 4-2 `generate()` | ✅ 완료 | prefill/decode 분리, top-p 샘플링, EOS 정지 |
-| 4-3 가중치 로딩 | ❌ 미착수 | 아래 체크리스트 참조 |
-| prefix-LM mask | ❌ 미구현 | 체크리스트에 없는 숨은 항목 |
-
-### 4-1에서 잡은 핵심 버그
-
-**`num_items`를 레이어 내부에서 읽으면 안 된다.** 공유 `KVCache` 객체로 바꾸면 `num_items`는 항상 레이어 0번의 길이를 본다. 레이어 0이 먼저 갱신해버리므로 레이어 1부터 RoPE 위치가 한 칸씩 밀린다. 크래시 없이 값만 미세하게 틀어지는 종류의 버그다.
-
-→ `GemmaModel.forward`에서 루프 시작 **전에** `cache_len`을 한 번 계산해 각 레이어로 전달하도록 수정. `test_kv_cache_consistency`("캐시 있는 경로 == 캐시 없는 경로")가 이를 지켜준다.
-
----
-
-## 🔴 즉시 수정: 전체 테스트가 OOM으로 실패
-
-```
-test/siglip 단독 실행  →  7 passed
-test/ 전체 실행        →  1 failed, 22 passed, 3 errors  (torch.OutOfMemoryError)
-```
-
-**원인** — `test_generate.py`가 `test_paligemma_model.py`와 동일한 `scope="session"` 모델 fixture를 중복 정의하고 있다. PaliGemma 모델 2개 + Gemma 모델 1개가 세션 내내 GPU에 상주해서, 나중에 도는 siglip 테스트가 자리를 못 잡는다.
-
-**해결** — `test/conftest.py`로 fixture를 하나만 두고 두 파일이 공유하게 한다. 3B 모델을 올리면 메모리가 훨씬 빡빡해지므로 4-3 전에 반드시 정리한다.
+| prefix-LM mask | ✅ 완료 | `build_prefix_lm_mask` + 단위 테스트 4개 |
+| RoPE 규약 | ✅ 해결 | HF `rotate_half` 방식으로 전환, 수치 검증 완료 |
+| SigLIP config | ✅ 해결 | 1152 / 4304 / 27 / 16, **patch 14** |
+| GemmaConfig | ✅ 해결 | 257216 / 2048 / 16384 / 18층 / 8헤드 |
+| BICUBIC 리사이즈 | ✅ 해결 | |
+| 테스트 OOM | ✅ 해결 | `conftest.py` fixture 통합 |
+| **4-3 가중치 로딩** | ❌ **남음** | 아래 체크리스트 |
 
 ---
 
-## 가중치 현황
+## 이번 라운드에 해결된 것
 
-| 리포 | 캐시 상태 |
-|---|---|
-| `google/paligemma-3b-**mix**-224` | **가중치 있음** — safetensors 3개, 603 텐서, **11.69 GB (fp32)** |
-| `google/paligemma-3b-pt-224` | 17 MB — config/토크나이저만 |
+### ① prefix-LM attention mask (신규 구현)
 
-**`mix`를 사용한다.** instruction-tuned라 `"What is in the image?"` 같은 자연어 질문에 바로 답한다. `pt`는 사전학습 체크포인트라 `"caption en"` 같은 태스크 프리픽스가 필요하다. 토크나이저·아키텍처는 동일하므로 현재 프로세서를 그대로 쓸 수 있다.
-
-> ⚠️ **fp32 11.69 GB는 12 GB GPU(RTX 4070)에 들어가지 않는다.** 로드 시 `bfloat16`으로 캐스팅해야 한다(~5.9 GB). 활성값까지 감안하면 이것이 유일한 선택지.
-
----
-
-## 4-3 준비 체크리스트
-
-### ① Config 값 교체
-
-| vision | 현재 → 원본 | text | 현재 → 원본 |
-|---|---|---|---|
-| `hidden_size` | 768 → **1152** | `vocab_size` | 300000 → **257216** |
-| `intermediate_size` | 3072 → **4304** | `hidden_size` | 1024 → **2048** |
-| `num_hidden_layer` | 12 → **27** | `intermediate_size` | 4096 → **16384** |
-| `num_attention_heads` | 12 → **16** | `num_hidden_layers` | 8 → **18** |
-| **`patch_size`** | 16 → **14** | `num_attention_heads` | 4 → **8** |
-| `image_size` | 224 (동일) | `num_key_value_heads` | 1 (동일) |
-| | | `max_position_embeddings` | 2048 → **8192** |
-
-- `head_dim`은 원본이 256이고 `2048 / 8 = 256`이라 현재의 `emb_dim // num_heads` 계산과 일치한다.
-- `rope_theta`는 config에 없어 HF 기본값 10000.0 — 현재 값과 같다.
-
-### ② `num_image_tokens` 196 → 256
-
-`patch_size`가 14가 되면 `(224/14)² = 256`이다. 현재 **5곳에 하드코딩**되어 있다:
-
-- `paligemma/multimodal/inference.py:82`
-- `paligemma/multimodal/input_processer.py:59`
-- `paligemma/multimodal/model.py:58`
-- `test/multimodal/test_paligemma_model.py:17`
-- `test/multimodal/test_generate.py:20`
-
-→ `(image_size // patch_size) ** 2`로 vision config에서 유도하도록 변경한다.
-
-### ③ state_dict 키 매핑
-
-체크포인트 키와 현재 구현의 키를 대조한 결과.
-
-| 우리 | HF 체크포인트 |
-|---|---|
-| `vision_tower.embedding.patch_embedding` | `vision_tower.`**`vision_model`**`.embeddings.patch_embedding` |
-| `vision_tower.embedding.`**`pos`**`_embedding` | `...embeddings.`**`position`**`_embedding` |
-| `vision_tower.encoder.layers.N.`**`attention`** | `...encoder.layers.N.`**`self_attn`** |
-| `vision_tower.encoder.layers.N.`**`layernorm`**`1/2` | `...layers.N.`**`layer_norm`**`1/2` |
-| `vision_tower.`**`layernorm`** | `vision_tower.vision_model.`**`post_layernorm`** |
-| `language_model.model.layers.N.`**`attention`**`.out_proj` | `...`**`self_attn`**`.`**`o_proj`** |
-| `language_model.model.layers.N.`**`rms_norm1`** | `...`**`input_layernorm`** |
-| `language_model.model.layers.N.`**`rms_norm2`** | `...`**`post_attention_layernorm`** |
-| `language_model.model.`**`rms_norm`** | `language_model.model.`**`norm`** |
-| `multi_modal_projector.`**`fc`** | `multi_modal_projector.`**`linear`** |
-| `language_model.lm_head.weight` | **체크포인트에 없음** (weight tying) |
-
-**이미 일치하는 것** — `q/k/v_proj`, `mlp.{gate,up,down}_proj`, `mlp.fc1/fc2`, vision의 `out_proj`.
-
-**`freqs_cis`** — `persistent=False`로 등록되어 있어 state_dict에 들어가지 않는다. unexpected key 문제 없음. ✅
-
-**`SiglipVisionModel`이 `SiglipVisionTransformer`를 상속**하는 구조 때문에 `vision_model.` 계층이 한 단계 빠져 있다. 매핑에서 끼워 넣으면 된다.
-
-### ④ ⚠️ RoPE 규약 불일치 — 가장 위험
-
-`apply_rotary_emb`가 `view_as_complex`로 **인접 쌍** `(x₀,x₁), (x₂,x₃), …`을 회전시킨다(LLaMA 원논문 방식). 반면 **HF Gemma는 `rotate_half`** 방식으로 앞뒤 절반 `(x₀, x₁₂₈), (x₁, x₁₂₉), …`을 묶는다.
-
-수학적으로 둘 다 올바른 RoPE지만 **가중치는 호환되지 않는다.** 어떤 채널이 어떤 회전 주파수를 받는지가 달라지기 때문이다. 랜덤 초기화에서는 차이가 드러나지 않으므로 지금까지 문제가 보이지 않았다. 사전학습 q/k 가중치를 그대로 올리면 **크래시도 shape 오류도 없이 조용히 틀린 출력**이 나온다.
-
-**해결** — `apply_rotary_emb`를 rotate_half 방식으로 바꾸거나(권장), 로딩 시 `q_proj`/`k_proj` 가중치 행을 permute한다.
-
-### ⑤ GELU 근사식
-
-원본 config는 vision·text 양쪽 모두 **`gelu_pytorch_tanh`** 를 쓴다. 현재 `GemmaMLP`는 `nn.functional.gelu`(exact erf)를 쓰고 있다.
-
-→ `nn.GELU(approximate='tanh')` 또는 `F.gelu(x, approximate='tanh')`로 변경. SigLIP MLP도 함께 확인한다.
-
-### ⑥ prefix-LM attention mask — 미구현
-
-현재 `GemmaModel`이 전체 시퀀스에 causal mask를 일괄 적용한다. PaliGemma의 핵심 특징은 **이미지 토큰과 프롬프트 텍스트 전체가 하나의 prefix이고, 그 안에서는 양방향**이라는 점이다. 생성 구간만 causal이다.
+PaliGemma의 핵심 특징 — **이미지 토큰과 프롬프트 텍스트 전체가 하나의 prefix이고 그 안에서는 양방향**, 생성 구간만 causal.
 
 ```
          img[0..255]  prompt   생성분
@@ -128,47 +41,352 @@ gen[0]  [   전부 봄   |  전부 봄 |  ✗  ]   ← 여기서부터 causal
 gen[1]  [   전부 봄   |  전부 봄 | gen[0] ]
 ```
 
-랜덤 가중치에서는 티가 안 났지만, **실제 가중치에서는 이미지 토큰이 서로를 못 봐서 품질이 크게 떨어진다.** "가중치는 맞는데 캡션이 이상하다"의 유력한 원인.
+**구현 위치** — `paligemma/multimodal/model.py`의 모듈 레벨 함수. `PaliGemmaForConditionalGeneration.forward`가 호출한다. 이미지 토큰 위치를 아는 유일한 계층이기 때문.
 
-마스크는 이미지 토큰 위치를 아는 `PaliGemmaForConditionalGeneration.forward`에서 만들어 `GemmaForCausalLM`으로 전달해야 한다.
+**구현 방식** — 마스크 행렬을 직접 그리지 않고 쿼리/키 위치 벡터의 브로드캐스팅 비교로 만든다:
 
-### ⑦ 리사이즈 보간법
+```python
+q_pos = cache_len + torch.arange(seq_len, device=device)   # (S,)
+k_pos = torch.arange(cache_len + seq_len, device=device)   # (C+S,)
 
-원본 image processor는 `resample=3`, 즉 **BICUBIC**이다. `transforms.Resize`의 기본값은 BILINEAR.
+allowed = (k_pos[None, :] < prefix_len) | (k_pos[None, :] <= q_pos[:, None])
+#          └─ prefix 는 양방향 ─┘         └─ 그 외는 causal ─┘
+```
 
-→ `interpolation=transforms.InterpolationMode.BICUBIC` 명시.
+이 한 식이 세 경우를 모두 처리한다:
+
+| 상황 | `prefix_len` | 결과 |
+|---|---|---|
+| 추론 prefill (260 토큰, 캐시 0) | 260 | `k_pos < 260`이 항상 참 → **전부 0** |
+| 추론 decode (1 토큰, 캐시 N) | 무엇이든 | `k_pos <= q_pos`가 항상 참 → **전부 0** |
+| 학습 (prefix + suffix) | 프롬프트 길이 | 우상단 블록만 `-inf` |
+
+> **추론 경로에서 마스크는 항상 전부 0이다.** 생성 토큰의 causality는 KV 캐시가 이미 보장하기 때문이다. 이전 구현이 전체 causal이었다는 것은 이미지 패치가 좌→우로만 읽히고 있었다는 뜻이다.
+
+**`cache_len` vs `prefix_len`** — 헷갈리기 쉬운데 서로 다른 축을 잰다.
+
+- `cache_len` = **시간축**: "이미 처리해서 캐시에 넣었는가"
+- `prefix_len` = **위치축**: "절대 위치 0부터 몇 번째까지가 양방향인가"
+
+prefill 때는 prefix가 전부 *새 토큰* 안에 있고, decode 때는 prefix가 전부 *캐시* 안에 있다. 같은 `prefix_len` 값이 두 상황에서 다른 곳을 가리킬 뿐이다.
+
+**`prefix_len`의 소유자** — 모델이 아니라 `generate()`. `KVCache`를 caller가 소유하게 만든 것과 같은 원칙이다.
+
+```python
+prefix_len = encoded["input_ids"].shape[-1]   # prefill 직전 한 번
+```
+
+`input_ids`에는 이미 `<image>` 토큰 256개가 들어 있으므로(프로세서가 프롬프트 문자열 단계에서 삽입) 이 길이로 충분하다. **이미지는 시퀀스를 늘리지 않는다** — 뚫려 있는 자리의 임베딩을 갈아끼울 뿐이다.
+
+나중에 파인튜닝 단계에서는 프로세서가 `token_type_ids`(0 = prefix, 1 = suffix)를 내보내게 하고 거기서 유도한다. `forward`의 인터페이스는 그대로라 바꿀 게 없다.
+
+### ② RoPE 규약 전환 — 4-3 최대 걸림돌 제거
+
+이전 구현은 `view_as_complex`로 **인접 쌍** `(x₀,x₁), (x₂,x₃), …`을 회전시켰다(LLaMA 원논문 방식). HF Gemma는 `rotate_half` 방식으로 **앞뒤 절반** `(x₀, x₁₂₈), (x₁, x₁₂₉), …`을 묶는다. 둘 다 올바른 RoPE지만 가중치는 호환되지 않는다.
+
+현재 `apply_rotary_emb`는 `chunk(2, dim=-1)` 기반으로 바뀌었다:
+
+```python
+x1, x2 = x.chunk(2, dim=-1)
+return torch.cat((x1 * cos - x2 * sin,
+                  x2 * cos + x1 * sin), dim=-1)
+```
+
+HF의 `x * cos_full + rotate_half(x) * sin_full`과 대수적으로 동일하다. 실제로 확인:
+
+```
+RoPE HF-compatible : True | maxdiff 2.4e-07
+```
+
+`torch.polar`로 `freqs_cis`를 만들고 `.real`/`.imag`를 cos/sin으로 쓰는 방식은 유지되었으므로 코드는 여전히 간결하다.
+
+### ③ 테스트 OOM 해결
+
+`test/conftest.py`에 세션 스코프 fixture 3개(`gemmamodel`, `siglipmodel`, `model_and_processor`)를 통합하고, `_release()`로 `torch.cuda.empty_cache()`를 호출하도록 정리. 배치 크기도 축소.
+
+### ④ SigLIP config → 실제 3B 값
+
+`hidden_size=1152`, `intermediate_size=4304`, `num_hidden_layer=27`, `num_attention_heads=16`, **`patch_size=14`**.
+
+`num_image_tokens`는 대부분의 호출부에서 `(image_size // patch_size) ** 2`로 유도하도록 바뀌어 자동으로 256이 된다.
+
+### ⑤ GELU / BICUBIC
+
+- `GemmaMLP`, `SiglipMLP` 모두 `approximate="tanh"` — 원본 config의 `gelu_pytorch_tanh`와 일치 ✅
+- `transforms.Resize(..., interpolation=InterpolationMode.BICUBIC)` — 원본 `resample=3`과 일치 ✅
+
+---
+
+## 가중치 현황
+
+| 리포 | 캐시 상태 |
+|---|---|
+| `google/paligemma-3b-**mix**-224` | **가중치 있음** — safetensors 3개, **603 텐서** |
+| `google/paligemma-3b-pt-224` | 17 MB — config/토크나이저만 |
+
+**`mix`를 사용한다.** instruction-tuned라 `"What is in the image?"` 같은 자연어 질문에 바로 답한다. `pt`는 `"caption en"` 같은 태스크 프리픽스가 필요하다. 토크나이저·아키텍처는 동일하다.
+
+> ⚠️ 체크포인트는 **fp32 11.1 GB**(shard 3개). 모델로 올리면 **10.89 GiB**인데 GPU 가용량이 11.42 GiB라 파라미터만으로 95%를 먹는다. `bfloat16` 캐스팅이 필수다(**5.45 GiB**). 방법은 4-3 체크리스트 ① 참조 — `model.to(dtype)`은 쓰면 안 된다.
+
+### 키 대조 결과
+
+정규식 매핑을 적용해 체크포인트와 대조한 결과 **완전히 일치**한다.
+
+```
+매핑된 키   : 603 / 모델 키 604
+missing     : 1   ['language_model.lm_head.weight']   ← weight tying, 정상
+unexpected  : 0
+shape 불일치: 0
+```
+
+매핑 규칙과 검증 방법은 아래 4-3 체크리스트 ③ 참조.
+
+---
+
+## 4-3 체크리스트 (남은 항목)
+
+> `GemmaConfig`는 이미 실제 3B 값으로 교체 완료 (vocab 257216 / hidden 2048 / intermediate 16384 / 18층 / 8헤드 / max_pos 8192).
+> `config.json`의 값과 vision·text 양쪽 모두 **전부 일치**함을 확인했다.
+
+### ① ⚠️ bfloat16 캐스팅의 함정 — 로딩보다 먼저 해결
+
+3B를 fp32로 올리면 GPU에 안 들어간다.
+
+```
+params   : 2.92 B
+fp32     : 10.89 GiB      ← GPU free 11.42 GiB. 파라미터만으로 95%
+bfloat16 :  5.45 GiB
+```
+
+그런데 **`model.to(torch.bfloat16)`을 쓰면 안 된다.** `nn.Module.to`는 부동소수점뿐 아니라 **복소수 텐서도** 캐스팅 대상에 넣기 때문에, `GemmaAttention.freqs_cis`(complex64)가 bfloat16으로 변환되며 허수부가 날아간다.
+
+```
+A) model.to(bfloat16)
+   freqs_cis : torch.bfloat16
+   forward   : RuntimeError  imag is not implemented for tensors with non-complex dtypes
+
+B) parameters() 만 캐스팅
+   freqs_cis : torch.complex64          ← 버퍼 보존 성공
+   forward   : RuntimeError  expected m1 and m2 to have the same dtype: float != BFloat16
+```
+
+**A**는 `.imag`가 실수 텐서에서 예외를 던져 조용히 틀리진 않지만, 이 경로는 못 쓴다.
+**B**는 버퍼는 지켰는데 `apply_rotary_emb`에서 fp32 `cos` × bf16 `x`가 **fp32로 승격**되고, 그게 bf16 가중치인 `out_proj`에 들어가면서 터진다.
+
+**수정 두 가지:**
+
+```python
+# ① apply_rotary_emb — cos/sin 을 x 의 dtype 으로
+cos = freqs_cis.real[None, None, :, :].to(x.dtype)
+sin = freqs_cis.imag[None, None, :, :].to(x.dtype)
+
+# ② 캐스팅은 파라미터만 (parameters() 는 버퍼를 포함하지 않는다)
+for p in model.parameters():
+    p.data = p.data.to(torch.bfloat16)
+model.to(DEVICE)
+```
+
+둘 다 적용 후 확인:
+```
+freqs_cis : torch.complex64
+output    : torch.bfloat16  torch.Size([1, 8, 1000])  | finite: True
+```
+
+> `model.to(device=..., dtype=...)` 한 줄로 처리하고 싶다면 `freqs_cis`를 complex 대신 **실수 `cos`/`sin` 버퍼 두 개**로 바꾸면 된다. HF Gemma가 그 방식이다. 지금 `torch.polar` 기반 코드가 간결하므로 위 2줄 수정이 더 작다.
+
+### ② 테스트용 작은 config 분리 — config 교체와 세트
+
+`GemmaConfig`가 3B가 된 순간 `conftest.py`의 세션 스코프 fixture 3개가 전부 3B를 만든다. bf16으로 줄여도 동시 상주하면 터진다. 그리고 **랜덤 가중치 3B는 테스트 가치가 0이다** — 지금 테스트가 검증하는 것은 배선(shape, 캐시 일관성, 마스크, 생성 루프)이지 표현력이 아니다.
+
+```python
+def _tiny_gemma():
+    return GemmaConfig(
+        vocab_size=257216,          # ← 줄이면 안 됨 (img_token_id = 257152)
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+    )
+
+def _tiny_vision():
+    return SiglipVisionConfig(
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layer=2,
+        num_attention_heads=4,
+        patch_size=14,              # ← 유지 (이미지 토큰 256개 전제 테스트가 있음)
+    )
+```
+
+`vocab_size`만 실제 값을 유지해야 한다. 프로세서가 진짜 토크나이저로 `<image>` = 257152를 만들기 때문. 임베딩이 257216 × 128 = 33M로 전체의 대부분이지만 fp32로도 133 MB라 문제없다.
+
+실제 3B 가중치 로딩 검증은 `@pytest.mark.slow`를 붙여 기본 실행에서 빠지게 하고 필요할 때만 `-m slow`로 돌린다.
+
+### ③ state_dict 키 매핑 — 검증 완료
+
+순서 있는 정규식 치환. **실제 체크포인트와 대조 완료.**
+
+```python
+RULES = [
+    # --- vision : HF 는 vision_model. 계층이 하나 더 있음 ---
+    (r'^vision_tower\.vision_model\.embeddings\.position_embedding', 'vision_tower.embedding.pos_embedding'),
+    (r'^vision_tower\.vision_model\.embeddings\.',                   'vision_tower.embedding.'),
+    (r'^vision_tower\.vision_model\.post_layernorm',                 'vision_tower.layernorm'),
+    (r'^vision_tower\.vision_model\.',                               'vision_tower.'),
+    (r'\.self_attn\.',                                               '.attention.'),
+    (r'\.layer_norm(\d)\.',                                          r'.layernorm\1.'),
+    # --- gemma ---
+    (r'\.input_layernorm\.',                                         '.rms_norm1.'),
+    (r'\.post_attention_layernorm\.',                                '.rms_norm2.'),
+    (r'\.attention\.o_proj\.',                                       '.attention.out_proj.'),
+    (r'^language_model\.model\.norm\.',                              'language_model.model.rms_norm.'),
+    # --- projector ---
+    (r'^multi_modal_projector\.linear\.',                            'multi_modal_projector.fc.'),
+]
+```
+
+**순서 의존성 세 군데:**
+
+- `position_embedding` → `pos_embedding` 규칙이 `embeddings.` → `embedding.` 규칙보다 **먼저** 와야 한다. 뒤집으면 접두사가 먼저 잘려 매칭이 안 된다.
+- `post_layernorm`을 `vision_model.` 제거보다 먼저 처리해야 한다.
+- `.self_attn.` → `.attention.`을 먼저 돌린 뒤에야 `.attention.o_proj.` → `.out_proj.`가 걸린다. vision 쪽은 이미 `out_proj`라 이 규칙에 안 걸린다 — 그래서 `o_proj`만 콕 집어야 한다.
+
+**검증 결과** (safetensors 헤더에서 shape만 읽어 데이터 로드 없이 대조):
+
+```
+매핑된 키   : 603 / 모델 키 604
+missing     : 1   ['language_model.lm_head.weight']
+unexpected  : 0
+shape 불일치: 0
+```
+
+missing 1개는 weight tying 때문에 체크포인트에 없는 것이므로 정상이다.
+
+> 가중치를 올리기 전에 이 대조를 먼저 돌리면 매핑 오류를 데이터 로드 없이 잡을 수 있다. `safe_open(...).get_slice(k).get_shape()`는 헤더만 읽는다.
+
+### ④ 로더 구현
+
+`paligemma/multimodal/loader.py`에 `load_hf_model(model_path, device, dtype)`.
+
+```
+1. 모델을 CPU 에 생성                             10.9 GiB fp32
+2. 파라미터를 bf16 으로 캐스팅                     →  5.5 GiB     ← 먼저 줄인다
+3. safe_open 으로 shard 3개 순회
+     키 매핑 + .to(dtype) 하며 state dict 구성      +5.5 GiB
+4. load_state_dict(state, strict=False)
+5. 반환값 검증
+6. model.to(device).eval()                        GPU 5.45 GiB
+```
+
+**2번을 3번보다 먼저** 한다. 뒤집으면 fp32 모델(10.9) + bf16 state dict(5.5)가 동시에 CPU RAM에 상주한다. RAM 58 GB라 어차피 되지만 습관을 들여두는 편이 좋다.
+
+```python
+with safe_open(shard, framework="pt", device="cpu") as f:
+    for k in f.keys():
+        state[map_key(k)] = f.get_tensor(k).to(dtype)
+```
+
+> 더 아끼려면 shard마다 `load_state_dict(부분_dict, strict=False)`를 호출하고 dict를 버리는 방식도 된다. CPU 피크가 8 GB 정도로 내려간다. 다만 `missing_keys`가 매번 나오므로 검증은 마지막에 따로 해야 한다.
+
+**검증** — `strict=True`는 tying 때문에 무조건 실패하므로 `strict=False` 후 반환값을 직접 본다.
+
+```python
+missing, unexpected = model.load_state_dict(state, strict=False)
+
+assert unexpected == [], f"매핑 안 된 키: {unexpected[:5]}"
+assert missing == ["language_model.lm_head.weight"], f"빠진 키: {missing[:5]}"
+```
+
+`unexpected == []`가 오타를 잡아주는 실질적인 안전장치다. `strict=False`를 그냥 쓰고 넘어가면 규칙 하나가 틀려도 그 레이어만 랜덤 가중치인 채 조용히 돌아간다.
+
+**`lm_head`는 따로 처리할 필요 없다.** `gemma/model.py:58`에서 `self.lm_head.weight = self.model.embed_tokens.weight`로 같은 `Parameter` 객체를 공유하므로, `embed_tokens`에 값이 복사되면 `lm_head`도 함께 갱신된다. bf16 캐스팅 때도 `parameters()`가 공유 파라미터를 중복 없이 순회하므로 tie가 유지된다.
+
+### ⑤ 자잘한 참고
+
+- 체크포인트는 **fp32 11.1 GB** 3개 shard. bf16으로 캐스팅하며 읽는 것이 필수다.
+- `max_position_embeddings=8192`라 `freqs_cis` 버퍼가 레이어당 8192×128 complex64 = 8.4 MB, 18개면 **151 MB**. 레이어마다 똑같은 값을 중복 보관하는 셈이므로 나중에 `GemmaModel`에서 한 번 만들어 공유하도록 옮기면 깔끔하다. 지금 당장 문제는 아니다.
+- 토크나이저도 mix-224 스냅샷에 같이 있다. 로더에서 `model_path` 하나로 가중치·토크나이저를 함께 처리하면 경로가 한 곳으로 모인다.
+
+## 남아 있는 작은 버그 두 개
+
+### `generate()`가 `str`이 아니라 `list`를 반환
+
+```python
+generated = torch.cat(generated, dim=-1)           # (1, N) — 2D
+return processor.tokenizer.decode(generated, ...)  # 2D → ['...']
+```
+
+확인:
+```
+tok.decode(torch.tensor([[100, 200, 300]])) -> ['<unused93><em>S']
+```
+
+README 4-2는 "return the string"이다. `generated[0]`을 넘기면 `str`이 된다. 빈 리스트 가드의 `return [""]`도 `""`로 함께 바꿔야 한다.
+
+⚠️ **현재 테스트 두 개가 이 동작에 맞춰져 있다** — `test_generate_return`의 `len(output[0]) == 5`, `test_stop_on_eos`의 `output[0] == ""`. 고칠 때 테스트도 같이 수정.
+
+### `forward` 안의 죽은 코드
+
+`if pixel_values is not None` 블록의 `seq_len = text_embedding.shape[-2]`는 바로 아래 `seq_len = input_ids.shape[-1]`로 덮어써진다.
 
 ---
 
 ## 권장 작업 순서
 
-1. **`conftest.py`로 fixture 통합** → 전체 테스트 초록불 복구
-2. **커밋** (KV cache 통일 + generate + 테스트)
-3. **④ RoPE, ⑤ GELU, ⑦ BICUBIC** — 가중치 없이 지금 고칠 수 있는 것들. 기존 테스트가 지켜준다
-4. **⑥ prefix-LM mask** + 테스트
-5. **① config + ② `num_image_tokens` 유도화**
-6. **③ 키 매핑 + `load_state_dict`** (bfloat16 캐스팅)
-7. 실제 이미지로 캡션 생성
+1. **`apply_rotary_emb`의 dtype 캐스팅** — 이거 없으면 bf16 로딩은 성공하고 forward에서 터진다
+2. **테스트용 작은 config 분리** — `conftest.py`가 3B를 만들지 않도록. 이걸 먼저 해야 이후 작업 중에 테스트를 돌릴 수 있다
+3. **`load_hf_model` + 키 매핑** — shape 대조 → safetensors 스트리밍 → `load_state_dict` → 반환값 검증
+4. **실제 추론 한 번** — 고양이 사진 + `"What is in the image?"` (mix 체크포인트)
+5. **`decode` 반환 타입 정리**
 
-> **3~5번을 6번보다 먼저 하는 것이 중요하다.** 가중치를 올린 뒤에 이것들을 고치면 출력이 이상할 때 "가중치 로딩이 틀렸나 / RoPE가 틀렸나 / mask가 틀렸나"가 뒤엉켜 원인 분리가 매우 어려워진다.
+> 4번에서 문장이 나오면 4-3 완료인 동시에, **prefix-LM 마스크·RoPE 규약·이미지 전처리가 전부 맞았다는 증거**가 된다. 반대로 이상한 출력이 나오면 이제 의심할 곳은 키 매핑과 config 값뿐이다 — 나머지를 미리 정리해 둔 덕분에 원인 분리가 쉽다.
 
 ---
 
-## 부록: 이미 해결된 항목
+## 부록 A: 마스크 테스트 설계
 
-작업 과정에서 발견하고 수정한 것들. 재발 방지용 기록.
+`build_prefix_lm_mask`는 순수 함수라 **모델도 GPU도 없이** 검증된다. 마스크는 눈으로 봐야 확신이 서는 코드이므로 작은 크기로 찍어보는 것이 핵심.
+
+| 테스트 | 검증 내용 |
+|---|---|
+| prefill 전부 0 | **핵심 회귀 테스트** — 이미지 패치가 causal로 읽히던 버그 |
+| `prefix_len=3, seq_len=5` 패턴 일치 | 로직 정확성 |
+| `prefix_len=0` ≡ `GemmaModel` causal | **두 곳의 마스크 규약이 일치하는가** |
+| decode 스텝 전부 0 | shape `(1,1,1,C+1)` |
+| 캐시 열은 항상 열림 | `prefix_len` 무관 |
+| prefix가 캐시 경계를 넘을 때 | 양방향이 실제로 작동하는 증거 |
+| dtype 보존 (bf16/fp16) | 4-3에서 터지는 것 미리 차단 |
+
+`torch.where(allowed, 0.0, -inf)` 대신 `zeros(dtype=...)` + `masked_fill_`을 쓰면 dtype 관리가 깔끔하다. `torch.arange`에 `device=`를 빼먹으면 CPU 텐서가 만들어져 비교 연산에서 에러가 난다.
+
+단위 테스트만으로는 **`forward`가 그 함수를 실제로 부르는지**를 검증할 수 없다. 배선이 끊겨도 전부 통과한다. `model.language_model.forward`를 spy로 감싸 prefill 마스크가 전부 0인지 확인하는 통합 테스트를 하나 두면 좋다.
+
+---
+
+## 부록 B: 이미 해결된 항목
+
+재발 방지용 기록.
 
 | 항목 | 내용 |
 |---|---|
-| KV cache pre-RoPE 저장 | 이전에 지적된 Critical 버그. 현재는 RoPE 적용 후 캐시에 저장 — 해결됨 |
-| `num_items` 레이어 내부 읽기 | `cache_len`을 `GemmaModel`에서 한 번 계산해 전달하도록 수정 |
+| KV cache pre-RoPE 저장 | Critical 버그. RoPE 적용 후 캐시에 저장하도록 수정 |
+| `num_items` 레이어 내부 읽기 | 레이어 0이 먼저 갱신해 레이어 1부터 RoPE 위치가 한 칸 밀림. `cache_len`을 `GemmaModel`에서 한 번 계산해 전달 |
 | 프롬프트 포맷 | `[BOS][img][text]` → `[img×N][BOS][text][\n]`. 원본 `build_string_from_input`과 일치 확인 |
-| `max_length` / `truncation` | 원본에 없는 파라미터. 제거. 이미지 토큰이 잘리는 사고 경로를 차단 |
+| `max_length` / `truncation` | 원본에 없는 파라미터. 제거 |
 | `if pixel_values:` | 다중 원소 텐서는 `bool()`이 `RuntimeError`. `is not None`으로 수정 |
-| `tokenizer.eos` | 존재하지 않는 속성. `eos_token_id`(=1)로 수정 |
+| `tokenizer.eos` | 존재하지 않는 속성. `eos_token_id`(=1) |
 | `argmax` shape | `keepdim=True` 없으면 `(B,)`가 되어 greedy 경로에서 터짐 |
-| 빈 `generated` | 첫 토큰이 EOS이거나 `max_new_tokens=0`이면 `torch.cat([])`가 `ValueError`. 조기 반환 가드 필요 |
-| `decode` 2D 입력 | `(1,N)` 텐서를 넘기면 `str`이 아니라 `list`가 반환됨. 1D로 넘겨야 함 |
+| `top_p` 하드코딩 | `cumulated_probs > 0.9`가 파라미터를 무시하고 있었음 |
+| device 누락 | `encoded` 텐서가 GPU로 안 올라가고 있었음. `next(model.parameters()).device` 한 번으로 통일 |
+| 빈 `generated` | 첫 토큰이 EOS면 `torch.cat([])`가 `ValueError`. 조기 반환 가드 추가 |
+| 테스트 OOM | fixture 중복 정의 + 과도한 배치 크기 |
+| RoPE 규약 | interleaved → rotate_half 전환, HF와 수치 일치 확인 |
+| BILINEAR 리사이즈 | BICUBIC으로 수정 |
+| SigLIP config | paligemma-3b 실제 값으로 교체 (patch 14) |
+| `from sys import prefix` | 자동완성 사고. 제거됨 |
+| `GemmaConfig` 토이 값 | 실제 3B 값으로 교체 |
+| `model.to(bfloat16)` | complex64 버퍼(`freqs_cis`)를 파괴. `parameters()`만 캐스팅해야 함 |
+| RoPE cos/sin dtype | fp32 cos × bf16 x → fp32 승격 → bf16 Linear 에서 dtype mismatch |
 
 ### 참고: 랜덤 가중치에서 `\n`만 생성되는 이유
 
