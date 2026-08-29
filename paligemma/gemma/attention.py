@@ -23,8 +23,8 @@ def apply_rotary_emb(x : torch.Tensor, freqs_cis : torch.Tensor):
     seq_len = x.size(-2)
     freqs_cis = freqs_cis[:seq_len]
 
-    cos = freqs_cis.real[None, None, :, :]
-    sin = freqs_cis.imag[None, None, :, :]
+    cos = freqs_cis.real[None, None, :, :].to(x.dtype)
+    sin = freqs_cis.imag[None, None, :, :].to(x.dtype)
 
     x1, x2 = x.chunk(2, dim=-1)
 
@@ -63,7 +63,7 @@ class GemmaAttention(nn.Module):
         k_states = self.k_proj(hidden_states)
         q_states = self.q_proj(hidden_states)
         v_states = self.v_proj(hidden_states)
-        freq_cis = self.freqs_cis[cache_len : cache_len + num_tokens]
+        freq_cis = self.freqs_cis[cache_len + 1 : cache_len + num_tokens + 1]
         
         k_states = k_states.reshape(batch_size, num_tokens, self.num_key_value_head, self.head_dim)
         k_states = k_states.transpose(1, 2)

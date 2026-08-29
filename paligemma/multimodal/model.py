@@ -1,4 +1,5 @@
 import torch
+import math
 import torch.nn as nn
 from paligemma.gemma.model import GemmaForCausalLM
 from paligemma.siglip.model import SiglipVisionModel
@@ -16,17 +17,16 @@ class PaliGemmaForConditionalGeneration(nn.Module):
 
     def forward(self, input_ids : torch.Tensor, pixel_values : torch.Tensor, kv_cache=None, attention_mask=None, prefix_len : int = -1):
         text_embedding = self.language_model.model.embed_tokens(input_ids)
+        seq_len = text_embedding.shape[-2]
 
         if pixel_values is not None:
             image_embedding = self.vision_tower(pixel_values)
-            image_embedding = self.multi_modal_projector(image_embedding)
+            image_embedding = self.multi_modal_projector(image_embedding) / math.sqrt(self.config.text_config.hidden_size)
             image_tokens_mask = (input_ids == self.config.img_token_id)
             text_embedding[image_tokens_mask] = image_embedding.reshape(-1, image_embedding.shape[-1])
-            seq_len = text_embedding.shape[-2]
 
         if attention_mask is None:
             cache_len = kv_cache.num_items if kv_cache is not None else 0
-            seq_len = input_ids.shape[-1]
             if prefix_len == -1:
                 prefix_len = seq_len + cache_len
 

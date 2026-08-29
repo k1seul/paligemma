@@ -1,7 +1,6 @@
 import pytest
 import torch
 from transformers import AutoTokenizer
-
 from paligemma.gemma.config import GemmaConfig
 from paligemma.gemma.model import GemmaForCausalLM
 from paligemma.siglip.config import SiglipVisionConfig
@@ -9,6 +8,7 @@ from paligemma.siglip.model import SiglipVisionModel
 from paligemma.multimodal.config import PaligemmaConfig
 from paligemma.multimodal.model import PaliGemmaForConditionalGeneration
 from paligemma.multimodal.input_processer import PaliGemmaProcessor
+from paligemma.multimodal.loader import make_load_tokenizer_and_paligemma_model
 
 DEVICE = "cuda"
 
@@ -63,5 +63,17 @@ def model_and_processor():
         num_image_tokens=(vision_config.image_size // vision_config.patch_size) ** 2,
         image_size=vision_config.image_size,
     )
+    yield model, processor
+    _release(model)
+
+@pytest.fixture(scope="session")
+def pretrained_model_and_processor():
+    tokenizer, model = make_load_tokenizer_and_paligemma_model()
+    processor = PaliGemmaProcessor(
+        tokenizer=tokenizer,
+        num_image_tokens=(224 // model.config.vision_config.patch_size) ** 2,
+        image_size=224,
+    )
+
     yield model, processor
     _release(model)

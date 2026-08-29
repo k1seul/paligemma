@@ -36,9 +36,11 @@ def generate (
     encoded = processor(prompt, image)
     kv_cache = KVCache()
     generated = []
+
     device = next(model.parameters()).device
+    dtype = next(model.parameters()).dtype
     encoded["input_ids"] = encoded["input_ids"].to(device)
-    encoded["pixel_values"] = encoded["pixel_values"].to(device)
+    encoded["pixel_values"] = encoded["pixel_values"].to(dtype).to(device)
     prefix_len = encoded["input_ids"].shape[-1]
 
     output = model(input_ids = encoded["input_ids"], 

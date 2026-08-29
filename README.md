@@ -475,7 +475,7 @@ def load_hf_model(model_path: str, device: str):
 ### CHAPTER 4 — Inference
 - [X] 4-1 KVCache
 - [X] 4-2 generate() function
-- [ ] 4-3 Load HF weights and run real inference
+- [X] 4-3 Load HF weights and run real inference
 
 ---
 

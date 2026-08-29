@@ -1,33 +1,38 @@
-# Chapter 4 (Inference) 진행 상황 & 4-3 준비 체크리스트
+# Chapter 4 (Inference) — 완료 기록
 
-> 4-1 KVCache, 4-2 `generate()`, 그리고 prefix-LM mask까지 완료된 시점의 정리.
-> 남은 것은 4-3(사전학습 가중치 로딩)뿐이다.
-> 최초 작성 2026-08-26 · **갱신 2026-08-27**
-
----
-
-## 현재 상태
-
-```
-$ uv run pytest test -q
-31 passed in 13.12s
-```
-
-| 항목 | 상태 | 비고 |
-|---|---|---|
-| 4-1 KVCache | ✅ 완료 | 클래스 + 전 계층 배선 + 정확성 검증 |
-| 4-2 `generate()` | ✅ 완료 | prefill/decode 분리, top-p 샘플링, EOS 정지 |
-| prefix-LM mask | ✅ 완료 | `build_prefix_lm_mask` + 단위 테스트 4개 |
-| RoPE 규약 | ✅ 해결 | HF `rotate_half` 방식으로 전환, 수치 검증 완료 |
-| SigLIP config | ✅ 해결 | 1152 / 4304 / 27 / 16, **patch 14** |
-| GemmaConfig | ✅ 해결 | 257216 / 2048 / 16384 / 18층 / 8헤드 |
-| BICUBIC 리사이즈 | ✅ 해결 | |
-| 테스트 OOM | ✅ 해결 | `conftest.py` fixture 통합 |
-| **4-3 가중치 로딩** | ❌ **남음** | 아래 체크리스트 |
+> **Chapter 4 전체 완료.** 사전학습 3B 가중치로 실제 캡션 생성까지 확인.
+> 최초 작성 2026-08-26 · 갱신 2026-08-27 · **완료 2026-08-30**
 
 ---
 
-## 이번 라운드에 해결된 것
+## 현재 상태 — 4-3 완료
+
+`google/paligemma-3b-mix-224` 가중치로 실제 이미지 캡셔닝이 동작한다.
+
+```
+$ uv run python -m paligemma.multimodal.loader        # 고양이 사진
+
+'What is in the image?'   ->  cat
+'caption en'              ->  In this image we can see a cat.
+'Describe the image.'     ->  In this image we can see a cat.
+```
+
+| 항목 | 상태 |
+|---|---|
+| 4-1 KVCache | ✅ |
+| 4-2 `generate()` | ✅ |
+| prefix-LM mask | ✅ `build_prefix_lm_mask` + 단위 테스트 |
+| RoPE 규약 | ✅ HF `rotate_half`, 수치 일치 확인 |
+| SigLIP / Gemma config | ✅ 실제 3B 값 |
+| BICUBIC 리사이즈 | ✅ |
+| 테스트 OOM | ✅ |
+| **4-3 가중치 로딩** | ✅ **완료** |
+
+> 문장이 나온다는 것은 **prefix-LM 마스크·RoPE 규약·키 매핑·이미지 전처리·bf16 캐스팅이 전부 맞았다는 뜻**이다. 하나라도 틀리면 이런 문장은 나오지 않는다.
+
+---
+
+## 4-3 이전에 정리한 것
 
 ### ① prefix-LM attention mask (신규 구현)
 
@@ -143,10 +148,10 @@ shape 불일치: 0
 
 ---
 
-## 4-3 체크리스트 (남은 항목)
+## 4-3 가중치 로딩 — 구현 기록
 
-> `GemmaConfig`는 이미 실제 3B 값으로 교체 완료 (vocab 257216 / hidden 2048 / intermediate 16384 / 18층 / 8헤드 / max_pos 8192).
-> `config.json`의 값과 vision·text 양쪽 모두 **전부 일치**함을 확인했다.
+> `config.json`의 값과 `GemmaConfig`/`SiglipVisionConfig`가 vision·text 양쪽 모두 **전부 일치**함을 확인했다.
+> 아래 ①~⑤가 로딩 자체, ⑥~⑧이 로딩 후 실제로 걸린 함정이다.
 
 ### ① ⚠️ bfloat16 캐스팅의 함정 — 로딩보다 먼저 해결
 
@@ -304,42 +309,107 @@ assert missing == ["language_model.lm_head.weight"], f"빠진 키: {missing[:5]}
 ### ⑤ 자잘한 참고
 
 - 체크포인트는 **fp32 11.1 GB** 3개 shard. bf16으로 캐스팅하며 읽는 것이 필수다.
-- `max_position_embeddings=8192`라 `freqs_cis` 버퍼가 레이어당 8192×128 complex64 = 8.4 MB, 18개면 **151 MB**. 레이어마다 똑같은 값을 중복 보관하는 셈이므로 나중에 `GemmaModel`에서 한 번 만들어 공유하도록 옮기면 깔끔하다. 지금 당장 문제는 아니다.
 - 토크나이저도 mix-224 스냅샷에 같이 있다. 로더에서 `model_path` 하나로 가중치·토크나이저를 함께 처리하면 경로가 한 곳으로 모인다.
 
-## 남아 있는 작은 버그 두 개
+### ⑥ 🔴 이미지 임베딩 스케일 — 로딩 후 실제로 걸린 함정
 
-### `generate()`가 `str`이 아니라 `list`를 반환
+가중치를 다 올리고 실행했는데 **이미지를 전혀 못 보는** 출력이 나왔다. 캡션이 `\n`만 나오거나 `<eos>`가 즉시 튀어나오는 증상.
+
+```
+baseline (수정 전)          top5 = '<eos>', 'empty', 'blank', ' empty', 'page'
++ 이미지 스케일 보정         top5 = 'cat',   'kitten', 'Cat',  'orange', 'k'
+```
+
+"empty / blank / page" — **빈 입력으로 취급**하고 있었다.
+
+**원인** — `GemmaModel.forward`가 `x = x * math.sqrt(hidden_size)`로 임베딩 **전체**에 45.25를 곱한다. 텍스트 임베딩에는 이게 Gemma 원래 설계지만, 이미지 feature는 프로젝터를 통과한 최종값이라 곱하면 안 된다. 그런데 지금 구조는 이미지를 먼저 끼워 넣고 나중에 통째로 곱하므로 **이미지만 45배 뻥튀기**된다.
+
+HF는 구조로 이 문제를 피한다 — 스케일링을 `GemmaScaledWordEmbedding` **안에** 두어 임베딩 조회에만 적용하고(`embed_scale=hidden_size**0.5`), 이미지 feature는 그 **뒤에** `masked_scatter`로 끼워 넣는다. 즉 이미지는 스케일링 경로를 아예 타지 않는다.
+
+**수정** — 프로젝터 출력을 미리 나눠서 상쇄시킨다. `PaliGemmaForConditionalGeneration.forward`:
 
 ```python
-generated = torch.cat(generated, dim=-1)           # (1, N) — 2D
-return processor.tokenizer.decode(generated, ...)  # 2D → ['...']
+image_embedding = self.multi_modal_projector(image_embedding) / math.sqrt(self.config.text_config.hidden_size)
 ```
 
-확인:
+> 이 버그의 무서운 점은 **크래시도 shape 오류도 없다**는 것이다. RMSNorm이 pre-norm이라 각 레이어 입력은 정규화되어 정상으로 보이고, 잔차 스트림의 비율만 틀어진다. 랜덤 가중치에서는 전혀 티가 안 나고, 실제 가중치를 올려야만 "캡션이 이상하다"로 드러난다.
+
+### ⑦ `pixel_values` dtype
+
+프로세서의 `ToTensor()`는 fp32를 만드는데 모델은 bf16이다. SigLIP 첫 Conv2d에서 터진다.
+
 ```
-tok.decode(torch.tensor([[100, 200, 300]])) -> ['<unused93><em>S']
+RuntimeError: Input type (torch.FloatTensor) and weight type (CPUBFloat16Type) should be the same
 ```
 
-README 4-2는 "return the string"이다. `generated[0]`을 넘기면 `str`이 된다. 빈 리스트 가드의 `return [""]`도 `""`로 함께 바꿔야 한다.
+`generate()`에서 모델 dtype을 따라가게 한다:
 
-⚠️ **현재 테스트 두 개가 이 동작에 맞춰져 있다** — `test_generate_return`의 `len(output[0]) == 5`, `test_stop_on_eos`의 `output[0] == ""`. 고칠 때 테스트도 같이 수정.
+```python
+device = next(model.parameters()).device
+dtype  = next(model.parameters()).dtype
+encoded["input_ids"]    = encoded["input_ids"].to(device)          # int64 유지
+encoded["pixel_values"] = encoded["pixel_values"].to(dtype).to(device)
+```
 
-### `forward` 안의 죽은 코드
+`torch.bfloat16` 하드코딩보다 모델에서 꺼내는 편이 낫다 — fp32 작은 모델을 쓰는 테스트에서도 그대로 동작한다.
 
-`if pixel_values is not None` 블록의 `seq_len = text_embedding.shape[-2]`는 바로 아래 `seq_len = input_ids.shape[-1]`로 덮어써진다.
+| 대상 | dtype | 조치 |
+|---|---|---|
+| tokenizer | — | 없음. 정수 id만 만듦 |
+| `input_ids` | int64 | 그대로 |
+| **`pixel_values`** | fp32 → bf16 | **변환 필요** |
+| `attention_mask` | 자동 | `text_embedding.dtype`을 따라감 |
+| 로짓 / 샘플링 | bf16 | 그대로 동작 (`multinomial`이 bf16 지원, cumsum 정밀도도 실용상 문제없음) |
+
+### ⑧ RULES 정규식 — 매칭이 없어도 조용하다
+
+`re.sub`는 매치가 없으면 문자열을 **그대로 돌려준다.** 에러가 안 난다. 실제로 겪은 실수들:
+
+| 실수 | 증상 |
+|---|---|
+| `(\d\.` — 괄호 안 닫힘 | `re.PatternError` (즉시 터짐, 그나마 나음) |
+| 치환 문자열 누락 `(r'...')` | 튜플이 아니라 문자열 → `ValueError: too many values to unpack` |
+| `^\.self_attn\.` — 불필요한 `^` | **절대 매치 안 됨.** `.self_attn.`은 문자열 중간에 나온다 |
+| `vison_tower` 오타 | 조용히 무시 |
+| 우리 쪽 이름을 `position_embedding`으로 착각 | 실제로는 `pos_embedding` |
+| 패턴엔 `\.` 없는데 치환엔 `.` 있음 | `out_proj..weight` 생성 |
+
+`^` 앵커 실수는 연쇄로 번진다 — `self_attn` → `attention` 변환이 죽으면 `.attention.o_proj` 규칙도 같이 죽는다.
+
+**그래서 `unexpected_keys` 검증이 필수다.** 규칙 하나가 죽어도 `load_state_dict(strict=False)`는 그냥 넘어가고, 그 레이어만 랜덤 가중치인 채로 돌아간다. 가중치를 올리기 전에 키 집합만 대조하면 11 GB 로드 없이 몇 초 만에 잡힌다.
 
 ---
 
-## 권장 작업 순서
+## 남은 것 (선택)
 
-1. **`apply_rotary_emb`의 dtype 캐스팅** — 이거 없으면 bf16 로딩은 성공하고 forward에서 터진다
-2. **테스트용 작은 config 분리** — `conftest.py`가 3B를 만들지 않도록. 이걸 먼저 해야 이후 작업 중에 테스트를 돌릴 수 있다
-3. **`load_hf_model` + 키 매핑** — shape 대조 → safetensors 스트리밍 → `load_state_dict` → 반환값 검증
-4. **실제 추론 한 번** — 고양이 사진 + `"What is in the image?"` (mix 체크포인트)
-5. **`decode` 반환 타입 정리**
+### 1-indexed 위치
 
-> 4번에서 문장이 나오면 4-3 완료인 동시에, **prefix-LM 마스크·RoPE 규약·이미지 전처리가 전부 맞았다는 증거**가 된다. 반대로 이상한 출력이 나오면 이제 의심할 곳은 키 매핑과 config 값뿐이다 — 나머지를 미리 정리해 둔 덕분에 원인 분리가 쉽다.
+HF는 RoPE 위치를 **1부터** 쓴다 — `modeling_paligemma.py:236`:
+
+```python
+position_ids = position_ids.unsqueeze(0) + 1  # Paligemma positions are 1-indexed
+```
+
+현재 구현은 `freqs_cis[cache_len : cache_len + num_tokens]`로 0부터 쓴다. 실측해보니 **출력 차이는 거의 없었다** (top5 순서만 미세하게 바뀜):
+
+```
+baseline        top5 = '<eos>', 'empty', 'blank', 'page',   ' empty'
++ 1-indexed     top5 = '<eos>', 'empty', 'blank', ' empty', 'page'
+```
+
+원본 파리티를 맞추려면 슬라이스를 한 칸 밀면 된다. `max_position_embeddings=8192`라 버퍼 여유는 충분하다.
+
+```python
+freq_cis = self.freqs_cis[cache_len + 1 : cache_len + 1 + num_tokens]
+```
+
+### `do_sample` 기본값
+
+캡셔닝은 greedy가 안정적이다. 위 출력은 전부 `do_sample=False`로 얻은 것. 기본값을 바꾸거나 최소한 예제는 greedy로 두는 편이 낫다.
+
+### `freqs_cis` 중복
+
+레이어마다 8192×128 complex64 = 8.4 MB를 똑같이 들고 있어 18개면 **151 MB**. `GemmaModel`에서 한 번 만들어 공유하도록 옮기면 깔끔하다.
 
 ---
 
@@ -387,7 +457,11 @@ README 4-2는 "return the string"이다. `generated[0]`을 넘기면 `str`이 �
 | `GemmaConfig` 토이 값 | 실제 3B 값으로 교체 |
 | `model.to(bfloat16)` | complex64 버퍼(`freqs_cis`)를 파괴. `parameters()`만 캐스팅해야 함 |
 | RoPE cos/sin dtype | fp32 cos × bf16 x → fp32 승격 → bf16 Linear 에서 dtype mismatch |
+| **이미지 임베딩 스케일** | **`sqrt(hidden)`이 이미지에도 곱해져 45배 뻥튀기. 실제 가중치에서만 드러남** |
+| `pixel_values` dtype | `ToTensor()` fp32 vs 모델 bf16 → Conv2d 에서 터짐 |
+| RULES `^` 앵커 | `^\.self_attn\.`은 절대 매치 안 됨. 매칭 실패는 조용하다 |
+| `generate` 반환 타입 | 2D 텐서를 `decode`에 넘기면 `list`. 수정됨 |
 
 ### 참고: 랜덤 가중치에서 `\n`만 생성되는 이유
 
-프롬프트 마지막 토큰이 `\n`(id 108)인데, 학습되지 않은 모델은 residual stream + weight tying 때문에 **방금 본 토큰을 그대로 예측**한다. 배선이 정상이라는 신호이기도 하다. 이 때문에 "토큰 1개 = 문자 1개"가 되어, 문자 길이로 토큰 수를 세는 테스트가 우연히 통과할 수 있으니 주의.
+프롬프트 마지막 토큰이 `\n`(id 108)인데, 학습되지 않은 모델은 residual stream + weight tying 때문에 **방금 본 토큰을 그대로 예측**한다. 가중치를 올린 뒤에도 `\n`만 나온다면 그건 다른 문제다 — 위 ⑥번을 볼 것. 배선이 정상이라는 신호이기도 하다. 이 때문에 "토큰 1개 = 문자 1개"가 되어, 문자 길이로 토큰 수를 세는 테스트가 우연히 통과할 수 있으니 주의.
