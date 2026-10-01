@@ -30,7 +30,7 @@ def generate (
     max_new_tokens: int = 100,
     temperature: float = 0.8,
     top_p: float = 0.9,
-    do_sample: bool = True
+    do_sample: bool = False
 ):
     model.eval()
     encoded = processor(prompt, image)
